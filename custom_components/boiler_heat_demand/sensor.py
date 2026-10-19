@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 
@@ -14,6 +15,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         [
             CallingValvesSensor(hass.data[DOMAIN][entry.entry_id], entry),
             LearningSensor(hass.data[DOMAIN][entry.entry_id], entry),
+            TemperatureDeficitSensor(hass.data[DOMAIN][entry.entry_id], entry),
         ]
     )
 
@@ -75,3 +77,35 @@ class CallingValvesSensor(SensorEntity):
     @property
     def native_value(self) -> int:
         return len(self._controller.decision.calling)
+
+
+class TemperatureDeficitSensor(SensorEntity):
+    """Largest room temperature deficit used by heat-demand calculations."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Maximum room temperature deficit"
+    _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, controller, entry: ConfigEntry) -> None:
+        self._controller = controller
+        self._attr_unique_id = f"{entry.entry_id}_temperature_deficit"
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(self._controller.add_listener(self.async_write_ha_state))
+
+    @property
+    def native_value(self) -> float | None:
+        return _round(self._controller.max_deficit)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "demand_mode": self._controller.demand_mode,
+            "effective_temperature_deficit": _round(self._controller.effective_deficit),
+            "start_deficit": self._controller.start_deficit,
+            "stop_deficit": self._controller.stop_deficit,
+            "manual_override": self._controller.manual_override,
+        }

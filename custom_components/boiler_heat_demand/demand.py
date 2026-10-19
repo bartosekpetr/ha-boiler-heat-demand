@@ -114,6 +114,7 @@ def decide(
     min_off: float,
     demand: bool | None = None,
     force_on: bool = False,
+    manual_override: bool | None = None,
 ) -> Decision:
     """Decide the boiler relay state, honouring minimum on/off times.
 
@@ -124,8 +125,13 @@ def decide(
     if demand is None:
         demand = len(calling) >= min_valves
     demand = demand or force_on
-    target = demand
-    if target != boiler_is_on and seconds_since_change is not None and not (force_on and target):
+    target = demand if manual_override is None else manual_override
+    if (
+        manual_override is None
+        and target != boiler_is_on
+        and seconds_since_change is not None
+        and not (force_on and target)
+    ):
         lockout = min_on if boiler_is_on else min_off
         if seconds_since_change < lockout:
             target = boiler_is_on

@@ -97,6 +97,16 @@ def test_safety_force_on_bypasses_min_off_only():
     assert decide([], 1, True, 10, 300, 300, demand=False, force_on=True).boiler_on
 
 
+def test_manual_override_bypasses_lockouts():
+    assert decide([], 1, False, 10, 300, 300, manual_override=True).boiler_on
+    assert not decide(["a"], 1, True, 10, 300, 300, manual_override=False).boiler_on
+
+
+def test_manual_override_does_not_change_calculated_demand():
+    decision = decide([], 1, False, None, 0, 0, manual_override=True)
+    assert not decision.demand and decision.boiler_on
+
+
 def test_room_with_two_valves_any_calls():
     room = demand.aggregate_room(
         [v(entity_id="a", hvac_action="idle", current_temp=21.0, target_temp=21.0),

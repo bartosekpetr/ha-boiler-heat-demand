@@ -10,7 +10,15 @@ from .const import DOMAIN
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
-    async_add_entities([ResetLearningButton(hass.data[DOMAIN][entry.entry_id], entry)])
+    controller = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities(
+        [
+            ResetLearningButton(controller, entry),
+            BoilerOnButton(controller, entry),
+            BoilerOffButton(controller, entry),
+            ResumeAutomaticButton(controller, entry),
+        ]
+    )
 
 
 class ResetLearningButton(ButtonEntity):
@@ -24,3 +32,39 @@ class ResetLearningButton(ButtonEntity):
 
     async def async_press(self) -> None:
         await self._controller.async_reset_learning()
+
+
+class BoilerOnButton(ButtonEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Boiler on"
+
+    def __init__(self, controller, entry: ConfigEntry) -> None:
+        self._controller = controller
+        self._attr_unique_id = f"{entry.entry_id}_boiler_on"
+
+    async def async_press(self) -> None:
+        await self._controller.async_set_manual_override(True)
+
+
+class BoilerOffButton(ButtonEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Boiler off"
+
+    def __init__(self, controller, entry: ConfigEntry) -> None:
+        self._controller = controller
+        self._attr_unique_id = f"{entry.entry_id}_boiler_off"
+
+    async def async_press(self) -> None:
+        await self._controller.async_set_manual_override(False)
+
+
+class ResumeAutomaticButton(ButtonEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Resume automatic control"
+
+    def __init__(self, controller, entry: ConfigEntry) -> None:
+        self._controller = controller
+        self._attr_unique_id = f"{entry.entry_id}_resume_automatic"
+
+    async def async_press(self) -> None:
+        await self._controller.async_resume_automatic()

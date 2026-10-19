@@ -89,6 +89,11 @@ class BoilerController:
         self._relay_bad_since: float | None = None
         self.alerts: set[str] = set()
         self.max_deficit: float | None = None
+        self.effective_deficit: float | None = None
+        self.demand_mode = DEFAULT_DEMAND_MODE
+        self.start_deficit = DEFAULT_START_DEFICIT
+        self.stop_deficit = DEFAULT_STOP_DEFICIT
+        self.manual_override: bool | None = None
         self.safety_override = False
         self.learners: dict[str, RoomLearner] = {}
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.learning")
@@ -113,6 +118,14 @@ class BoilerController:
         self.learners.clear()
         await self._store.async_remove()
         self._publish(self.decision)
+
+    async def async_set_manual_override(self, state: bool) -> None:
+        self.manual_override = state
+        await self.async_evaluate()
+
+    async def async_resume_automatic(self) -> None:
+        self.manual_override = None
+        await self.async_evaluate()
 
     def _rooms(self, cfg: dict) -> list[RoomConfig]:
         return build_rooms(list(cfg[CONF_VALVES]), cfg.get(CONF_ROOMS))
@@ -187,6 +200,11 @@ class BoilerController:
         mode = cfg.get(CONF_DEMAND_MODE, DEFAULT_DEMAND_MODE)
         safety_temp = float(cfg.get(CONF_SAFETY_MIN_TEMP, DEFAULT_SAFETY_MIN_TEMP))
         min_valves = int(cfg.get(CONF_MIN_VALVES, DEFAULT_MIN_VALVES))
+        start_deficit = float(cfg.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT))
+        stop_deficit = float(cfg.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT))
+        self.demand_mode = mode
+        self.start_deficit = start_deficit
+        self.stop_deficit = stop_deficit
         now = dt_util.utcnow()
 
         relay_state = self.hass.states.get(relay)
@@ -204,8 +222,6 @@ class BoilerController:
         too_cold = False
         learning_on = bool(cfg.get(CONF_LEARNING, DEFAULT_LEARNING))
         outdoor = self._outdoor_temp(cfg)
-        start_deficit = float(cfg.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT))
-        stop_deficit = float(cfg.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT))
         mono = time.monotonic()
         for room_cfg in self._rooms(cfg):
             name = room_cfg.name
@@ -269,6 +285,7 @@ class BoilerController:
         self.max_deficit = max(deficits) if deficits else None
         self.safety_override = too_cold
         effective_deficit = max(effective) if effective else None
+        self.effective_deficit = effective_deficit
 
         demand = demand_met(
             mode,
@@ -299,6 +316,7 @@ class BoilerController:
             float(cfg.get(CONF_MIN_OFF, DEFAULT_MIN_OFF)) * 60,
             demand=demand,
             force_on=too_cold,
+            manual_override=self.manual_override,
         )
         if decision.boiler_on == boiler_is_on:
             # Relay already matches what we want (e.g. changed manually): nothing to verify.

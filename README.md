@@ -27,7 +27,9 @@ A critical alert is raised (Repairs issue with critical severity, persistent not
 
 Alerts clear automatically when the relay behaves again.
 
-Entities: `binary_sensor` *Heat demand* (attributes `calling_rooms`, `max_temperature_deficit`, `safety_override`, `alerts`), `sensor` *Rooms calling for heat*, diagnostic `sensor` *Rooms learned* (per-room model as attributes) and a *Reset learning* button.
+Entities: `binary_sensor` *Heat demand* (attributes `calling_rooms`, `max_temperature_deficit`, `safety_override`, `alerts`), `sensor` *Rooms calling for heat*, diagnostic `sensor` *Rooms learned* (per-room model as attributes), diagnostic `sensor` *Maximum room temperature deficit* (raw `target - current`, plus the learning-adjusted deficit and configured thresholds), and buttons for *Boiler on*, *Boiler off*, *Resume automatic control* and *Reset learning*.
+
+Manual boiler buttons hold the selected state until *Resume automatic control* is pressed. Manual control bypasses the minimum on/off timers; manual off also takes precedence over the low-temperature safety override. The selection is not persisted, so the integration returns to automatic control after a Home Assistant restart.
 
 ### Self-learning
 Each room is modelled separately from its room temperature (sensor or valve median), no extra hardware needed:
@@ -73,7 +75,7 @@ Decision logic lives in `demand.py` (no Home Assistant imports) and is unit-test
 
 ## Ideas / roadmap
 
-- Frost protection / manual override
+- Frost protection
 - Per-valve weighting, pump overrun, DHW priority
 
 MIT licensed.
