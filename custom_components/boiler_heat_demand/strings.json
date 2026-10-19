@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Boiler heat demand",
+        "description": "Pick the boiler relay and the thermostatic valves that can call for heat.",
+        "data": {
+          "relay_entity": "Boiler relay (switch)",
+          "valve_entities": "Thermostatic valves (climate)",
+          "min_valves": "Valves required to start the boiler",
+          "min_on_minutes": "Minimum on time",
+          "min_off_minutes": "Minimum off time",
+          "hysteresis": "Hysteresis (used only if a valve has no heating action)"
+        }
+      }
+    },
+    "abort": { "already_configured": "This relay is already configured." }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Boiler heat demand",
+        "data": {
+          "relay_entity": "Boiler relay (switch)",
+          "valve_entities": "Thermostatic valves (climate)",
+          "min_valves": "Valves required to start the boiler",
+          "min_on_minutes": "Minimum on time",
+          "min_off_minutes": "Minimum off time",
+          "hysteresis": "Hysteresis (used only if a valve has no heating action)"
+        }
+      }
+    }
+  }
+}
