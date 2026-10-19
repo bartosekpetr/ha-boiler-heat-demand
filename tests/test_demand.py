@@ -95,3 +95,42 @@ def test_safety_force_on_bypasses_min_off_only():
     assert decide([], 1, False, 10, 300, 300, force_on=True).boiler_on
     assert not decide(["a"], 1, False, 10, 300, 300).boiler_on  # normal demand stays locked out
     assert decide([], 1, True, 10, 300, 300, demand=False, force_on=True).boiler_on
+
+
+def test_room_with_two_valves_any_calls():
+    room = demand.aggregate_room(
+        [v(entity_id="a", hvac_action="idle", current_temp=21.0, target_temp=21.0),
+         v(entity_id="b", hvac_action="heating", current_temp=20.0, target_temp=21.0)], 0.3, False)
+    assert room.calling and room.available and room.active
+    assert room.temp == 20.5 and room.target == 21.0
+
+
+def test_room_uses_external_sensor_and_highest_target():
+    room = demand.aggregate_room(
+        [v(entity_id="a", current_temp=24.0, target_temp=21.0),
+         v(entity_id="b", current_temp=24.0, target_temp=22.0)], 0.3, False, sensor_temp=20.0)
+    assert room.temp == 20.0 and room.target == 22.0 and room.calling  # fallback uses room temp
+
+
+def test_room_median_ignores_outlier():
+    valves = [v(entity_id=str(i), current_temp=t, target_temp=21.0) for i, t in enumerate([20.0, 20.2, 25.0])]
+    assert demand.aggregate_room(valves, 0.3, False).temp == 20.2
+
+
+def test_room_partial_and_total_failure():
+    ok = v(entity_id="a", hvac_action="idle")
+    dead = v(entity_id="b", available=False)
+    assert demand.aggregate_room([ok, dead], 0.3, False).available
+    assert not demand.aggregate_room([dead], 0.3, False).available
+    off = demand.aggregate_room([v(hvac_mode="off")], 0.3, False)
+    assert off.available and not off.active and not off.calling
+
+
+def test_build_rooms_groups_and_defaults():
+    rooms = demand.build_rooms(
+        ["climate.a", "climate.b", "climate.c"],
+        [{"name": "Living", "valves": ["climate.a", "climate.b", "climate.x"], "temp_sensor": "sensor.t"}],
+    )
+    assert [r.name for r in rooms] == ["Living", "climate.c"]
+    assert rooms[0].valves == ("climate.a", "climate.b") and rooms[0].sensor == "sensor.t"
+    assert demand.build_rooms(["climate.a"], None)[0].valves == ("climate.a",)

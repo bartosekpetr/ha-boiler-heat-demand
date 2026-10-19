@@ -31,7 +31,7 @@ class HeatDemandSensor(BinarySensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         return {
-            "calling_valves": list(self._controller.decision.calling),
+            "calling_rooms": list(self._controller.decision.calling),
             "max_temperature_deficit": self._controller.max_deficit,
             "safety_override": self._controller.safety_override,
             "alerts": sorted(self._controller.alerts),

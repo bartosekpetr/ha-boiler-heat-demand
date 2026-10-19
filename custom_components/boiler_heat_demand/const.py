@@ -16,6 +16,18 @@ CONF_SAFETY_MIN_TEMP = "safety_min_temp"
 CONF_VALVE_FAILSAFE = "valve_failsafe"
 CONF_RELAY_TIMEOUT = "relay_timeout_minutes"
 CONF_NOTIFY = "notify_service"
+CONF_LEARNING = "learning_enabled"
+CONF_ROOMS = "rooms"
+CONF_ROOM_NAME = "name"
+CONF_ROOM_VALVES = "valves"
+CONF_ROOM_SENSOR = "temp_sensor"
+CONF_ADD_ANOTHER = "add_another"
+CONF_EDIT_ROOMS = "edit_rooms"
+CONF_OUTDOOR = "outdoor_temp_entity"
+
+DEFAULT_LEARNING = True
+STORAGE_VERSION = 1
+SAVE_DELAY_S = 300
 
 DEFAULT_DEMAND_MODE = "valve_count"
 DEFAULT_START_DEFICIT = 0.5
@@ -31,4 +43,4 @@ DEFAULT_MIN_OFF = 5
 DEFAULT_HYSTERESIS = 0.3
 DEFAULT_VALVE_TIMEOUT = 30
 
-PLATFORMS = ["binary_sensor", "sensor"]
+PLATFORMS = ["binary_sensor", "sensor", "button"]

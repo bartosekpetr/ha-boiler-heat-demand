@@ -7,6 +7,7 @@
         "data": {
           "relay_entity": "Boiler relay (switch)",
           "valve_entities": "Thermostatic valves (climate)",
+          "edit_rooms": "Redefine room grouping",
           "demand_mode": "How demand is evaluated",
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
@@ -18,11 +19,25 @@
           "valve_timeout_minutes": "Valve report timeout (0 disables)",
           "valve_failsafe": "If a valve does not respond",
           "relay_timeout_minutes": "Raise critical alert if the relay is unavailable for",
-          "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)"
+          "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)",
+          "learning_enabled": "Self-learning (per-room heating model)",
+          "outdoor_temp_entity": "Outdoor temperature sensor (optional, improves learning)"
         }
-      }
-    },
-    "abort": { "already_configured": "This relay is already configured." }
+      },
+      "rooms": {
+        "title": "Group valves into rooms",
+        "description": "Optional. Valves in the same room are treated as one room. Valves you do not group stay separate rooms. Leave the name and valves empty to finish.",
+        "data": {
+          "name": "Room name",
+          "valves": "Valves in this room",
+          "temp_sensor": "Room temperature sensor (optional, more accurate than the valves)",
+          "add_another": "Add another room"
+        }
+      }    },
+    "error": {
+      "room_incomplete": "Enter both a room name and at least one valve.",
+      "room_duplicate": "That room name or one of its valves is already used."
+    },    "abort": { "already_configured": "This relay is already configured." }
   },
   "options": {
     "step": {
@@ -31,6 +46,7 @@
         "data": {
           "relay_entity": "Boiler relay (switch)",
           "valve_entities": "Thermostatic valves (climate)",
+          "edit_rooms": "Redefine room grouping",
           "demand_mode": "How demand is evaluated",
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
@@ -42,9 +58,24 @@
           "valve_timeout_minutes": "Valve report timeout (0 disables)",
           "valve_failsafe": "If a valve does not respond",
           "relay_timeout_minutes": "Raise critical alert if the relay is unavailable for",
-          "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)"
+          "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)",
+          "learning_enabled": "Self-learning (per-room heating model)",
+          "outdoor_temp_entity": "Outdoor temperature sensor (optional, improves learning)"
         }
-      }
+      },
+      "rooms": {
+        "title": "Group valves into rooms",
+        "description": "Optional. Valves in the same room are treated as one room. Valves you do not group stay separate rooms. Leave the name and valves empty to finish.",
+        "data": {
+          "name": "Room name",
+          "valves": "Valves in this room",
+          "temp_sensor": "Room temperature sensor (optional, more accurate than the valves)",
+          "add_another": "Add another room"
+        }
+      }    },
+    "error": {
+      "room_incomplete": "Enter both a room name and at least one valve.",
+      "room_duplicate": "That room name or one of its valves is already used."
     }
   },
   "issues": {

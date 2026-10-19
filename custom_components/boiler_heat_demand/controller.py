@@ -1,4 +1,4 @@
-"""Evaluates valve demand and drives the boiler relay."""
+﻿"""Evaluates valve demand and drives the boiler relay."""
 from __future__ import annotations
 
 import logging
@@ -12,17 +12,21 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.components import persistent_notification
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_DEMAND_MODE,
     CONF_HYSTERESIS,
+    CONF_LEARNING,
     CONF_MIN_OFF,
     CONF_MIN_ON,
     CONF_MIN_VALVES,
     CONF_NOTIFY,
+    CONF_OUTDOOR,
     CONF_RELAY,
     CONF_RELAY_TIMEOUT,
+    CONF_ROOMS,
     CONF_SAFETY_MIN_TEMP,
     CONF_START_DEFICIT,
     CONF_STOP_DEFICIT,
@@ -31,6 +35,7 @@ from .const import (
     CONF_VALVE_TIMEOUT,
     DEFAULT_DEMAND_MODE,
     DEFAULT_HYSTERESIS,
+    DEFAULT_LEARNING,
     DEFAULT_MIN_OFF,
     DEFAULT_MIN_ON,
     DEFAULT_MIN_VALVES,
@@ -42,19 +47,23 @@ from .const import (
     DEFAULT_VALVE_TIMEOUT,
     DOMAIN,
     RELAY_VERIFY_SECONDS,
+    SAVE_DELAY_S,
+    STORAGE_VERSION,
 )
 from .demand import (
     FAILSAFE_HEAT,
     FAILSAFE_HOLD,
+    MODE_DEFICIT,
     Decision,
+    RoomConfig,
     ValveState,
+    aggregate_room,
+    build_rooms,
     decide,
     demand_met,
-    valve_calls_for_heat,
-    valve_deficit,
-    valve_is_too_cold,
     valve_report_is_stale,
 )
+from .learning import RoomLearner, RoomModel, learned_call
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,8 +90,45 @@ class BoilerController:
         self.alerts: set[str] = set()
         self.max_deficit: float | None = None
         self.safety_override = False
+        self.learners: dict[str, RoomLearner] = {}
+        self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.learning")
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[Callable[[], None]] = []
+
+    async def async_load(self) -> None:
+        data = await self._store.async_load() or {}
+        for entity_id, model in data.get("rooms", {}).items():
+            self.learners[entity_id] = RoomLearner(model=RoomModel.from_dict(model))
+
+    def _learner(self, entity_id: str) -> RoomLearner:
+        return self.learners.setdefault(entity_id, RoomLearner())
+
+    def _schedule_save(self) -> None:
+        self._store.async_delay_save(self._dump, SAVE_DELAY_S)
+
+    def _dump(self) -> dict:
+        return {"rooms": {k: v.model.to_dict() for k, v in self.learners.items()}}
+
+    async def async_reset_learning(self) -> None:
+        self.learners.clear()
+        await self._store.async_remove()
+        self._publish(self.decision)
+
+    def _rooms(self, cfg: dict) -> list[RoomConfig]:
+        return build_rooms(list(cfg[CONF_VALVES]), cfg.get(CONF_ROOMS))
+
+    def _sensor_temp(self, entity_id: str | None) -> float | None:
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        return _float(state.state)
+
+    def _outdoor_temp(self, cfg: dict) -> float | None:
+        entity_id = cfg.get(CONF_OUTDOOR)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        return _float(state.state)
 
     @property
     def _cfg(self) -> dict:
@@ -95,6 +141,7 @@ class BoilerController:
     def start(self) -> None:
         cfg = self._cfg
         entities = [*cfg[CONF_VALVES], cfg[CONF_RELAY]]
+        entities += [r.sensor for r in self._rooms(cfg) if r.sensor]
         self._unsubs.append(async_track_state_change_event(self.hass, entities, self._on_change))
         # Re-evaluate periodically so min on/off lockouts expire without a state change.
         self._unsubs.append(
@@ -153,34 +200,83 @@ class BoilerController:
         calling: list[str] = []
         failsafe_calling = False
         deficits: list[float] = []
+        effective: list[float] = []
         too_cold = False
-        for entity_id in cfg[CONF_VALVES]:
-            snap = self._snapshot(entity_id, now, timeout_seconds)
-            if not snap.available:
-                # Unresponsive valve: apply the configured failsafe.
+        learning_on = bool(cfg.get(CONF_LEARNING, DEFAULT_LEARNING))
+        outdoor = self._outdoor_temp(cfg)
+        start_deficit = float(cfg.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT))
+        stop_deficit = float(cfg.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT))
+        mono = time.monotonic()
+        for room_cfg in self._rooms(cfg):
+            name = room_cfg.name
+            snaps = [self._snapshot(e, now, timeout_seconds) for e in room_cfg.valves]
+            room = aggregate_room(
+                snaps,
+                hysteresis,
+                name in previously_calling,
+                self._sensor_temp(room_cfg.sensor),
+            )
+            if not room.available:
+                # Every valve of the room is unresponsive: apply the configured failsafe.
                 if failsafe == FAILSAFE_HEAT or (
-                    failsafe == FAILSAFE_HOLD and entity_id in previously_calling
+                    failsafe == FAILSAFE_HOLD and name in previously_calling
                 ):
-                    calling.append(entity_id)
+                    calling.append(name)
                     failsafe_calling = True
                 continue
-            if valve_calls_for_heat(snap, hysteresis, entity_id in previously_calling):
-                calling.append(entity_id)
-            deficit = valve_deficit(snap)
+            if not room.active:
+                continue
+            was_calling = name in previously_calling
+            wants_heat = room.calling
+            deficit = None
+            if room.temp is not None and room.target is not None:
+                deficit = room.target - room.temp
+            contribution = deficit
+            if learning_on and deficit is not None:
+                learner = self._learner(name)
+                learner.observe(
+                    mono,
+                    room.temp,
+                    room.target,
+                    boiler_is_on and room.calling,
+                    outdoor,
+                    start_deficit,
+                )
+                if mode == MODE_DEFICIT:
+                    base = deficit > stop_deficit if was_calling else deficit >= start_deficit
+                else:
+                    base = room.calling
+                wants_heat = learned_call(
+                    learner.model,
+                    base,
+                    was_calling,
+                    room.temp,
+                    room.target,
+                    outdoor,
+                    start_deficit,
+                )
+                if learner.model.ready:
+                    contribution = max(deficit, start_deficit) if wants_heat else 0.0
+                self._schedule_save()
+            if wants_heat:
+                calling.append(name)
             if deficit is not None:
                 deficits.append(deficit)
-            too_cold = too_cold or valve_is_too_cold(snap, safety_temp)
+                effective.append(contribution)
+            if safety_temp > 0 and room.temp is not None and room.temp <= safety_temp:
+                too_cold = True
         self._calling = set(calling)
         self.max_deficit = max(deficits) if deficits else None
         self.safety_override = too_cold
+        effective_deficit = max(effective) if effective else None
 
         demand = demand_met(
             mode,
             len(calling),
-            self.max_deficit,
+            effective_deficit,
             min_valves,
-            float(cfg.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT)),
-            float(cfg.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT)),
+            start_deficit,
+            stop_deficit,
             boiler_is_on,
             failsafe_calling,
         )

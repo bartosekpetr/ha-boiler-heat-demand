@@ -130,3 +130,86 @@ def decide(
         if seconds_since_change < lockout:
             target = boiler_is_on
     return Decision(demand=demand, boiler_on=target, calling=tuple(sorted(calling)))
+
+
+@dataclass(frozen=True)
+class RoomState:
+    """Aggregated view of the valves heating one room."""
+
+    available: bool
+    active: bool
+    calling: bool
+    temp: float | None
+    target: float | None
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def aggregate_room(
+    valves: list[ValveState],
+    hysteresis: float,
+    currently_calling: bool,
+    sensor_temp: float | None = None,
+) -> RoomState:
+    """Combine all valves of a room into one state.
+
+    - available: at least one valve responds; active: at least one is not off.
+    - temp: the external room sensor if given, else the median of the valves
+      (a valve sits on the radiator and reads warm, the median limits one outlier).
+    - target: the highest setpoint among active valves.
+    - calling: any active valve wants heat; valves without an hvac_action use
+      the room temperature for the hysteresis fallback.
+    """
+    live = [v for v in valves if v.available]
+    active = [v for v in live if v.hvac_mode not in (None, "off")]
+    if not live:
+        return RoomState(False, False, False, None, None)
+    if not active:
+        return RoomState(True, False, False, None, None)
+
+    temps = [v.current_temp for v in active if v.current_temp is not None]
+    temp = sensor_temp if sensor_temp is not None else (_median(temps) if temps else None)
+    targets = [v.target_temp for v in active if v.target_temp is not None]
+    target = max(targets) if targets else None
+
+    calling = False
+    for v in active:
+        if v.hvac_action is None and temp is not None:
+            v = ValveState(v.entity_id, v.available, v.hvac_mode, None, temp, v.target_temp)
+        if valve_calls_for_heat(v, hysteresis, currently_calling):
+            calling = True
+            break
+    return RoomState(True, True, calling, temp, target)
+
+
+@dataclass(frozen=True)
+class RoomConfig:
+    name: str
+    valves: tuple[str, ...]
+    sensor: str | None = None
+
+
+def build_rooms(valves: list[str], rooms: list[dict] | None) -> list[RoomConfig]:
+    """Configured rooms first; each valve not assigned to a room becomes its own room.
+
+    A valve belongs to at most one room, and rooms only keep configured valves.
+    """
+    result: list[RoomConfig] = []
+    used: set[str] = set()
+    names: set[str] = set()
+    for room in rooms or []:
+        members = tuple(e for e in room.get("valves", []) if e in valves and e not in used)
+        name = (room.get("name") or "").strip()
+        if not members or not name or name in names:
+            continue
+        used.update(members)
+        names.add(name)
+        result.append(RoomConfig(name, members, room.get("temp_sensor") or None))
+    for entity_id in valves:
+        if entity_id not in used and entity_id not in names:
+            result.append(RoomConfig(entity_id, (entity_id,)))
+    return result
