@@ -7,10 +7,18 @@
         "data": {
           "relay_entity": "Boiler relay (switch)",
           "valve_entities": "Thermostatic valves (climate)",
-          "min_valves": "Valves required to start the boiler",
+          "demand_mode": "How demand is evaluated",
+          "min_valves": "Valves required to start the boiler (valve count mode)",
+          "start_deficit": "Start when largest deficit reaches (deficit mode)",
+          "stop_deficit": "Stop when largest deficit falls to (deficit mode)",
           "min_on_minutes": "Minimum on time",
           "min_off_minutes": "Minimum off time",
-          "hysteresis": "Hysteresis (used only if a valve has no heating action)"
+          "hysteresis": "Hysteresis (used only if a valve has no heating action)",
+          "safety_min_temp": "Low-temperature safety: heat when any active room is at or below (0 disables)",
+          "valve_timeout_minutes": "Valve report timeout (0 disables)",
+          "valve_failsafe": "If a valve does not respond",
+          "relay_timeout_minutes": "Raise critical alert if the relay is unavailable for",
+          "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)"
         }
       }
     },
@@ -23,12 +31,34 @@
         "data": {
           "relay_entity": "Boiler relay (switch)",
           "valve_entities": "Thermostatic valves (climate)",
-          "min_valves": "Valves required to start the boiler",
+          "demand_mode": "How demand is evaluated",
+          "min_valves": "Valves required to start the boiler (valve count mode)",
+          "start_deficit": "Start when largest deficit reaches (deficit mode)",
+          "stop_deficit": "Stop when largest deficit falls to (deficit mode)",
           "min_on_minutes": "Minimum on time",
           "min_off_minutes": "Minimum off time",
-          "hysteresis": "Hysteresis (used only if a valve has no heating action)"
+          "hysteresis": "Hysteresis (used only if a valve has no heating action)",
+          "safety_min_temp": "Low-temperature safety: heat when any active room is at or below (0 disables)",
+          "valve_timeout_minutes": "Valve report timeout (0 disables)",
+          "valve_failsafe": "If a valve does not respond",
+          "relay_timeout_minutes": "Raise critical alert if the relay is unavailable for",
+          "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)"
         }
       }
+    }
+  },
+  "issues": {
+    "relay_unavailable": {
+      "title": "Boiler relay unavailable",
+      "description": "{relay} is unavailable and may be stuck ON. Check the boiler manually."
+    },
+    "relay_stuck": {
+      "title": "Boiler relay not following commands",
+      "description": "{relay} did not change to the commanded state and may be stuck."
+    },
+    "relay_command_failed": {
+      "title": "Boiler relay command failed",
+      "description": "Switching {relay} failed. The relay may be stuck in its current state."
     }
   }
 }

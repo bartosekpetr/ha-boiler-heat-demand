@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
 
 spec = importlib.util.spec_from_file_location(
     "demand",
@@ -10,6 +11,8 @@ demand = importlib.util.module_from_spec(spec)
 sys.modules["demand"] = demand
 spec.loader.exec_module(demand)
 ValveState, valve_calls_for_heat, decide = demand.ValveState, demand.valve_calls_for_heat, demand.decide
+valve_report_is_stale = demand.valve_report_is_stale
+demand_met, valve_deficit, valve_is_too_cold = demand.demand_met, demand.valve_deficit, demand.valve_is_too_cold
 
 
 def v(**kw):
@@ -48,3 +51,47 @@ def test_min_on_and_off_lockout():
     assert not decide([], 1, True, 400, 300, 300).boiler_on
     assert not decide(["a"], 1, False, 60, 300, 300).boiler_on  # held off
     assert decide(["a"], 1, False, 400, 300, 300).boiler_on
+
+
+def test_valve_report_timeout():
+    now = datetime.now(timezone.utc)
+    assert valve_report_is_stale(now - timedelta(seconds=60), now, 60)
+    assert not valve_report_is_stale(now - timedelta(seconds=59), now, 60)
+    assert valve_report_is_stale(None, now, 60)
+
+
+def test_valve_report_timeout_can_be_disabled():
+    now = datetime.now(timezone.utc)
+    assert not valve_report_is_stale(None, now, 0)
+
+
+def test_deficit_mode_start_stop_hysteresis():
+    args = dict(min_valves=1, start_deficit=0.5, stop_deficit=0.1)
+    assert not demand_met("temperature_deficit", 0, 0.3, boiler_is_on=False, **args)
+    assert demand_met("temperature_deficit", 0, 0.5, boiler_is_on=False, **args)
+    assert demand_met("temperature_deficit", 0, 0.3, boiler_is_on=True, **args)  # keeps heating
+    assert not demand_met("temperature_deficit", 0, 0.1, boiler_is_on=True, **args)
+    assert not demand_met("temperature_deficit", 0, None, boiler_is_on=False, **args)
+
+
+def test_deficit_mode_failsafe_forces_demand():
+    assert demand_met("temperature_deficit", 1, None, 1, 0.5, 0.1, False, failsafe_calling=True)
+
+
+def test_valve_deficit_ignores_off_and_unavailable():
+    assert valve_deficit(v(current_temp=19.0, target_temp=21.0)) == 2.0
+    assert valve_deficit(v(hvac_mode="off", current_temp=19.0, target_temp=21.0)) is None
+    assert valve_deficit(v(available=False, current_temp=19.0, target_temp=21.0)) is None
+
+
+def test_safety_min_temp():
+    assert valve_is_too_cold(v(current_temp=7.0), 8.0)
+    assert not valve_is_too_cold(v(current_temp=9.0), 8.0)
+    assert not valve_is_too_cold(v(current_temp=7.0, hvac_mode="off"), 8.0)
+    assert not valve_is_too_cold(v(current_temp=1.0), 0)
+
+
+def test_safety_force_on_bypasses_min_off_only():
+    assert decide([], 1, False, 10, 300, 300, force_on=True).boiler_on
+    assert not decide(["a"], 1, False, 10, 300, 300).boiler_on  # normal demand stays locked out
+    assert decide([], 1, True, 10, 300, 300, demand=False, force_on=True).boiler_on

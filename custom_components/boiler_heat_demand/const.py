@@ -8,10 +8,27 @@ CONF_MIN_VALVES = "min_valves"
 CONF_MIN_ON = "min_on_minutes"
 CONF_MIN_OFF = "min_off_minutes"
 CONF_HYSTERESIS = "hysteresis"
+CONF_VALVE_TIMEOUT = "valve_timeout_minutes"
+CONF_DEMAND_MODE = "demand_mode"
+CONF_START_DEFICIT = "start_deficit"
+CONF_STOP_DEFICIT = "stop_deficit"
+CONF_SAFETY_MIN_TEMP = "safety_min_temp"
+CONF_VALVE_FAILSAFE = "valve_failsafe"
+CONF_RELAY_TIMEOUT = "relay_timeout_minutes"
+CONF_NOTIFY = "notify_service"
+
+DEFAULT_DEMAND_MODE = "valve_count"
+DEFAULT_START_DEFICIT = 0.5
+DEFAULT_STOP_DEFICIT = 0.1
+DEFAULT_SAFETY_MIN_TEMP = 8.0
+DEFAULT_VALVE_FAILSAFE = "ignore"
+DEFAULT_RELAY_TIMEOUT = 5
+RELAY_VERIFY_SECONDS = 60
 
 DEFAULT_MIN_VALVES = 1
 DEFAULT_MIN_ON = 5
 DEFAULT_MIN_OFF = 5
 DEFAULT_HYSTERESIS = 0.3
+DEFAULT_VALVE_TIMEOUT = 30
 
 PLATFORMS = ["binary_sensor", "sensor"]

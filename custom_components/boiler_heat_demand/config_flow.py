@@ -10,18 +10,34 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_DEMAND_MODE,
     CONF_HYSTERESIS,
     CONF_MIN_OFF,
     CONF_MIN_ON,
     CONF_MIN_VALVES,
+    CONF_NOTIFY,
     CONF_RELAY,
+    CONF_RELAY_TIMEOUT,
+    CONF_SAFETY_MIN_TEMP,
+    CONF_START_DEFICIT,
+    CONF_STOP_DEFICIT,
+    CONF_VALVE_FAILSAFE,
     CONF_VALVES,
+    CONF_VALVE_TIMEOUT,
+    DEFAULT_DEMAND_MODE,
     DEFAULT_HYSTERESIS,
     DEFAULT_MIN_OFF,
     DEFAULT_MIN_ON,
     DEFAULT_MIN_VALVES,
+    DEFAULT_RELAY_TIMEOUT,
+    DEFAULT_SAFETY_MIN_TEMP,
+    DEFAULT_START_DEFICIT,
+    DEFAULT_STOP_DEFICIT,
+    DEFAULT_VALVE_FAILSAFE,
+    DEFAULT_VALVE_TIMEOUT,
     DOMAIN,
 )
+from .demand import FAILSAFE_HEAT, FAILSAFE_HOLD, FAILSAFE_IGNORE, MODE_COUNT, MODE_DEFICIT
 
 
 def _minutes(default: int) -> selector.NumberSelector:
@@ -30,16 +46,60 @@ def _minutes(default: int) -> selector.NumberSelector:
     )
 
 
+def _timeout_minutes() -> selector.NumberSelector:
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=0, max=1440, step=1, mode="box", unit_of_measurement="min"
+        )
+    )
+
+
+def _degrees(max_value: float) -> selector.NumberSelector:
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=0, max=max_value, step=0.1, mode="box", unit_of_measurement="°C"
+        )
+    )
+
+
+_DEMAND_MODES = [
+    selector.SelectOptionDict(value=MODE_COUNT, label="Number of valves calling for heat"),
+    selector.SelectOptionDict(value=MODE_DEFICIT, label="Temperature deficit (target - current)"),
+]
+_FAILSAFES = [
+    selector.SelectOptionDict(value=FAILSAFE_IGNORE, label="Ignore the valve (no demand)"),
+    selector.SelectOptionDict(value=FAILSAFE_HEAT, label="Assume it calls for heat"),
+    selector.SelectOptionDict(value=FAILSAFE_HOLD, label="Keep its last known demand"),
+]
+
+
 def _tuning_schema(d: dict[str, Any]) -> dict:
     return {
+        vol.Required(CONF_DEMAND_MODE, default=d.get(CONF_DEMAND_MODE, DEFAULT_DEMAND_MODE)): selector.SelectSelector(
+            selector.SelectSelectorConfig(options=_DEMAND_MODES, mode="dropdown")
+        ),
         vol.Required(CONF_MIN_VALVES, default=d.get(CONF_MIN_VALVES, DEFAULT_MIN_VALVES)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=1, max=50, step=1, mode="box")
         ),
+        vol.Required(CONF_START_DEFICIT, default=d.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT)): _degrees(10),
+        vol.Required(CONF_STOP_DEFICIT, default=d.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT)): _degrees(10),
         vol.Required(CONF_MIN_ON, default=d.get(CONF_MIN_ON, DEFAULT_MIN_ON)): _minutes(DEFAULT_MIN_ON),
         vol.Required(CONF_MIN_OFF, default=d.get(CONF_MIN_OFF, DEFAULT_MIN_OFF)): _minutes(DEFAULT_MIN_OFF),
         vol.Required(CONF_HYSTERESIS, default=d.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0, max=3, step=0.1, mode="box", unit_of_measurement="°C")
         ),
+        vol.Required(CONF_SAFETY_MIN_TEMP, default=d.get(CONF_SAFETY_MIN_TEMP, DEFAULT_SAFETY_MIN_TEMP)): _degrees(30),
+        vol.Required(
+            CONF_VALVE_TIMEOUT,
+            default=d.get(CONF_VALVE_TIMEOUT, DEFAULT_VALVE_TIMEOUT),
+        ): _timeout_minutes(),
+        vol.Required(CONF_VALVE_FAILSAFE, default=d.get(CONF_VALVE_FAILSAFE, DEFAULT_VALVE_FAILSAFE)): selector.SelectSelector(
+            selector.SelectSelectorConfig(options=_FAILSAFES, mode="dropdown")
+        ),
+        vol.Required(CONF_RELAY_TIMEOUT, default=d.get(CONF_RELAY_TIMEOUT, DEFAULT_RELAY_TIMEOUT)): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=1, max=120, step=1, mode="box", unit_of_measurement="min")
+        ),
+        vol.Optional(CONF_NOTIFY, description={"suggested_value": d.get(CONF_NOTIFY)}): selector.TextSelector(),
     }
 
 
