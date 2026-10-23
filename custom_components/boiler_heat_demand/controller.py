@@ -66,8 +66,11 @@ from .demand import (
     build_rooms,
     decide,
     demand_met,
+    detect_pid_attribute,
+    parse_percentage,
     valve_report_is_stale,
 )
+from .devices import pid_entity_for_climate
 from .learning import RoomLearner, RoomModel, learned_call
 
 _LOGGER = logging.getLogger(__name__)
@@ -102,6 +105,7 @@ class BoilerController:
         self.max_pid_demand: float | None = None
         self.cumulative_temp_delta: float | None = None
         self.cumulative_pid_demand: float | None = None
+        self.pid_sources: dict[str, str] = {}
         self.safety_override = False
         self.learners: dict[str, RoomLearner] = {}
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.learning")
@@ -163,6 +167,7 @@ class BoilerController:
         cfg = self._cfg
         entities = [*cfg[CONF_VALVES], cfg[CONF_RELAY]]
         entities += [r.sensor for r in self._rooms(cfg) if r.sensor]
+        entities += [e for e in map(self._pid_entity, cfg[CONF_VALVES]) if e]
         self._unsubs.append(async_track_state_change_event(self.hass, entities, self._on_change))
         # Re-evaluate periodically so min on/off lockouts expire without a state change.
         self._unsubs.append(
@@ -182,8 +187,17 @@ class BoilerController:
     async def _on_timer(self, _now) -> None:
         await self.async_evaluate()
 
+    def _pid_entity(self, climate_id: str) -> str | None:
+        """PID heating demand sensor of the device that owns this valve, if it has one."""
+        return pid_entity_for_climate(self.hass, climate_id)
+
     def _snapshot(
-        self, entity_id: str, now, timeout_seconds: float, pid_attribute: str | None
+        self,
+        entity_id: str,
+        now,
+        timeout_seconds: float,
+        pid_attribute: str | None,
+        pid_entity: str | None = None,
     ) -> ValveState:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
@@ -192,12 +206,23 @@ class BoilerController:
         if valve_report_is_stale(last_reported, now, timeout_seconds):
             return ValveState(entity_id, False, None, None, None, None)
         attrs = state.attributes
-        raw_pid_demand = attrs.get(pid_attribute) if pid_attribute else None
-        pid_demand = (
-            None if isinstance(raw_pid_demand, bool) else _float(raw_pid_demand)
-        )
-        if pid_demand is not None and not 0 <= pid_demand <= 100:
-            pid_demand = None
+        pid_demand = None
+        pid_source = None
+        # 1) manual attribute from older versions, 2) the device's PID sensor, 3) auto-detected attribute
+        if pid_attribute:
+            pid_demand = parse_percentage(attrs.get(pid_attribute))
+            pid_source = pid_attribute
+        if pid_demand is None and pid_entity:
+            pid_state = self.hass.states.get(pid_entity)
+            if pid_state is not None and pid_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                pid_demand = parse_percentage(pid_state.state)
+                pid_source = pid_entity
+        if pid_demand is None:
+            detected = detect_pid_attribute(attrs)
+            if detected:
+                pid_source, pid_demand = detected
+        if pid_demand is None:
+            pid_source = None
         return ValveState(
             entity_id,
             True,
@@ -206,6 +231,7 @@ class BoilerController:
             _float(attrs.get("current_temperature")),
             _float(attrs.get("temperature")),
             pid_demand,
+            pid_source,
         )
 
     async def async_evaluate(self) -> None:
@@ -238,9 +264,11 @@ class BoilerController:
         positive_deficits: list[float] = []
         effective: list[float] = []
         pid_demands: list[float] = []
+        pid_sources: dict[str, str] = {}
         too_cold = False
         learning_on = bool(cfg.get(CONF_LEARNING, DEFAULT_LEARNING))
         outdoor = self._outdoor_temp(cfg)
+        # Legacy override from older versions; normally the attribute is auto-detected per valve.
         pid_attribute = (cfg.get(CONF_PID_ATTRIBUTE) or "").strip() or None
         pid_start = float(cfg.get(CONF_PID_START, DEFAULT_PID_START))
         pid_stop = float(cfg.get(CONF_PID_STOP, DEFAULT_PID_STOP))
@@ -248,7 +276,7 @@ class BoilerController:
         for room_cfg in self._rooms(cfg):
             name = room_cfg.name
             snaps = [
-                self._snapshot(e, now, timeout_seconds, pid_attribute)
+                self._snapshot(e, now, timeout_seconds, pid_attribute, self._pid_entity(e))
                 for e in room_cfg.valves
             ]
             room = aggregate_room(
@@ -267,13 +295,11 @@ class BoilerController:
                 continue
             if not room.active:
                 continue
-            pid_demands.extend(
-                valve.pid_demand
-                for valve in snaps
-                if valve.available
-                and valve.hvac_mode not in (None, "off")
-                and valve.pid_demand is not None
-            )
+            for valve in snaps:
+                if valve.available and valve.pid_demand is not None:
+                    pid_sources[valve.entity_id] = valve.pid_source
+                    if valve.hvac_mode not in (None, "off"):
+                        pid_demands.append(valve.pid_demand)
             was_calling = name in previously_calling
             wants_heat = room.calling
             deficit = None
@@ -315,6 +341,7 @@ class BoilerController:
             if safety_temp > 0 and room.temp is not None and room.temp <= safety_temp:
                 too_cold = True
         self._calling = set(calling)
+        self.pid_sources = pid_sources
         self.max_deficit = max(deficits) if deficits else None
         self.max_pid_demand = max(pid_demands) if pid_demands else None
         self.cumulative_temp_delta = sum(positive_deficits) if positive_deficits else None

@@ -21,6 +21,11 @@ from custom_components.boiler_heat_demand.button import (
 from custom_components.boiler_heat_demand.const import DOMAIN
 from custom_components.boiler_heat_demand.controller import BoilerController
 from custom_components.boiler_heat_demand.demand import Decision
+from custom_components.boiler_heat_demand.devices import (
+    climate_entities_for_devices,
+    pid_entity_for_climate,
+    split_valves_by_device,
+)
 from custom_components.boiler_heat_demand.sensor import (
     CallingValvesSensor,
     CumulativePidDemandSensor,
@@ -32,7 +37,7 @@ from custom_components.boiler_heat_demand.sensor import (
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_controller_reads_configured_pid_attribute(hass):
+async def test_controller_auto_detects_pid_attribute(hass):
     hass.states.async_set(
         "climate.living_room",
         "heat",
@@ -40,30 +45,50 @@ async def test_controller_reads_configured_pid_attribute(hass):
             "hvac_action": "idle",
             "current_temperature": 20,
             "temperature": 21,
-            "pi_output": 42.5,
+            "pi_heating_demand": 42.5,
         },
     )
     controller = object.__new__(BoilerController)
     controller.hass = hass
 
     snapshot = controller._snapshot(
-        "climate.living_room", datetime.now(timezone.utc), 0, "pi_output"
+        "climate.living_room", datetime.now(timezone.utc), 0, None
     )
 
     assert snapshot.available
     assert snapshot.pid_demand == 42.5
+    assert snapshot.pid_source == "pi_heating_demand"
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_controller_ignores_invalid_pid_values(hass):
+async def test_controller_legacy_attribute_overrides_detection(hass):
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"pi_heating_demand": 10, "custom_output": 60},
+    )
     controller = object.__new__(BoilerController)
     controller.hass = hass
-    for value in ("not-a-number", -1, 101):
-        hass.states.async_set("climate.living_room", "heat", {"pid": value})
+
+    snapshot = controller._snapshot(
+        "climate.living_room", datetime.now(timezone.utc), 0, "custom_output"
+    )
+
+    assert snapshot.pid_demand == 60
+    assert snapshot.pid_source == "custom_output"
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_controller_ignores_valves_without_pid_attribute(hass):
+    controller = object.__new__(BoilerController)
+    controller.hass = hass
+    for attrs in ({}, {"pid": "not-a-number"}, {"pid": -1}, {"pid": 101}):
+        hass.states.async_set("climate.living_room", "heat", attrs)
         snapshot = controller._snapshot(
-            "climate.living_room", datetime.now(timezone.utc), 0, "pid"
+            "climate.living_room", datetime.now(timezone.utc), 0, None
         )
         assert snapshot.pid_demand is None
+        assert snapshot.pid_source is None
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
@@ -76,7 +101,7 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
             "hvac_action": "idle",
             "current_temperature": 20,
             "temperature": 21,
-            "pi_output": 35,
+            "pi_heating_demand": 35,
         },
     )
     hass.states.async_set(
@@ -86,7 +111,7 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
             "hvac_action": "idle",
             "current_temperature": 19.5,
             "temperature": 21,
-            "pi_output": 20,
+            "valve_position": 20,
         },
     )
     entry = MockConfigEntry(
@@ -95,7 +120,6 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
             "relay_entity": "switch.boiler",
             "valve_entities": ["climate.living_room", "climate.bedroom"],
             "demand_mode": "pid_demand",
-            "pid_demand_attribute": "pi_output",
             "pid_start_percent": 20,
             "pid_stop_percent": 5,
             "learning_enabled": False,
@@ -107,6 +131,10 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
 
     await controller.async_evaluate()
 
+    assert controller.pid_sources == {
+        "climate.living_room": "pi_heating_demand",
+        "climate.bedroom": "valve_position",
+    }
     assert controller.max_pid_demand == 35
     assert controller.cumulative_pid_demand == 55
     assert controller.max_deficit == 1.5
@@ -122,7 +150,7 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
             "hvac_action": "idle",
             "current_temperature": 21.5,
             "temperature": 21,
-            "pi_output": 4,
+            "pi_heating_demand": 4,
         },
     )
     hass.states.async_set(
@@ -132,7 +160,7 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
             "hvac_action": "idle",
             "current_temperature": 20.5,
             "temperature": 21,
-            "pi_output": 2,
+            "valve_position": 2,
         },
     )
     await controller.async_evaluate()
@@ -142,6 +170,120 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
     assert controller.cumulative_pid_demand == 6
     assert controller.cumulative_temp_delta == 0.5
     controller._command.assert_awaited_with("switch.boiler", False)
+
+
+def _register_valve_device(hass, name, with_pid_sensor=True):
+    """Create a device shaped like the ZHA iTRV: climate + HVAC action + PI heating demand."""
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+
+    entry = MockConfigEntry(domain="zha")
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("zha", name)},
+        name=name,
+    )
+    registry = er.async_get(hass)
+    object_id = name.lower().replace(" ", "_")
+    climate = registry.async_get_or_create(
+        "climate", "zha", f"{name}-climate", suggested_object_id=object_id,
+        device_id=device.id, config_entry=entry,
+    )
+    registry.async_get_or_create(
+        "sensor", "zha", f"{name}-hvac_action", suggested_object_id=f"{object_id}_hvac_action",
+        device_id=device.id, config_entry=entry, original_name="HVAC action",
+    )
+    pid = None
+    if with_pid_sensor:
+        pid = registry.async_get_or_create(
+            "sensor", "zha", f"{name}-pi_heating_demand",
+            suggested_object_id=f"{object_id}_pi_heating_demand",
+            device_id=device.id, config_entry=entry, original_name="Pi heating demand",
+            unit_of_measurement="%",
+        )
+    return device, climate.entity_id, pid.entity_id if pid else None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_device_resolves_to_climate_and_pid_sensor(hass):
+    device, climate, pid = _register_valve_device(hass, "Chodba vstup")
+    other_device, other_climate, _ = _register_valve_device(hass, "Loznice", with_pid_sensor=False)
+
+    assert climate == "climate.chodba_vstup"
+    assert pid == "sensor.chodba_vstup_pi_heating_demand"
+    assert climate_entities_for_devices(hass, [device.id, other_device.id]) == (
+        [climate, other_climate],
+        [],
+    )
+    assert pid_entity_for_climate(hass, climate) == pid
+    assert pid_entity_for_climate(hass, other_climate) is None
+    assert pid_entity_for_climate(hass, "climate.not_in_the_registry") is None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_split_valves_by_device_keeps_legacy_climate_entities(hass):
+    device, climate, _ = _register_valve_device(hass, "Chodba vstup")
+
+    devices, others = split_valves_by_device(hass, [climate, "climate.generic_thermostat"])
+
+    assert devices == [device.id]
+    assert others == ["climate.generic_thermostat"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_pid_sensor_of_the_device_drives_a_legacy_climate_only_entry(hass):
+    _, climate, pid = _register_valve_device(hass, "Chodba vstup")
+    hass.states.async_set("switch.boiler", "off")
+    hass.states.async_set(
+        climate,
+        "heat",
+        {"hvac_action": "idle", "current_temperature": 20, "temperature": 21},
+    )
+    hass.states.async_set(pid, "39", {"unit_of_measurement": "%"})
+    # Entry as created by earlier versions: only climate entity ids, no device or PID settings.
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "relay_entity": "switch.boiler",
+            "valve_entities": [climate],
+            "demand_mode": "pid_demand",
+            "pid_start_percent": 20,
+            "pid_stop_percent": 5,
+            "learning_enabled": False,
+            "valve_timeout_minutes": 0,
+        },
+    )
+    controller = BoilerController(hass, entry)
+    controller._command = AsyncMock()
+
+    await controller.async_evaluate()
+
+    assert controller.pid_sources == {climate: pid}
+    assert controller.max_pid_demand == 39
+    controller._command.assert_awaited_once_with("switch.boiler", True)
+
+    hass.states.async_set(pid, "unavailable")
+    await controller.async_evaluate()
+    assert controller.pid_sources == {}
+    assert controller.max_pid_demand is None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_climate_attribute_is_used_when_the_device_has_no_pid_sensor(hass):
+    _, climate, pid = _register_valve_device(hass, "Loznice", with_pid_sensor=False)
+    assert pid is None
+    hass.states.async_set(
+        climate, "heat", {"current_temperature": 20, "temperature": 21, "pi_heating_demand": 47}
+    )
+    controller = object.__new__(BoilerController)
+    controller.hass = hass
+
+    snapshot = controller._snapshot(
+        climate, datetime.now(timezone.utc), 0, None, controller._pid_entity(climate)
+    )
+
+    assert snapshot.pid_demand == 47
+    assert snapshot.pid_source == "pi_heating_demand"
 
 
 def test_entities_share_the_automated_boiler_device():

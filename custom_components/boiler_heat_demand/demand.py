@@ -3,6 +3,113 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Iterable, Mapping
+
+# Well-known TRV attributes that report heating demand / valve opening as 0-100 %.
+PID_ATTRIBUTE_CANDIDATES = (
+    "pi_heating_demand",
+    "pid_heating_demand",
+    "pid_demand",
+    "pi_demand",
+    "pid_output",
+    "pi_output",
+    "heating_demand",
+    "valve_opening_degree",
+    "valve_position",
+    "valve_opening",
+    "valve_open_percent",
+    "valve_level",
+)
+_PID_NAME_HINTS = ("pid", "heating_demand", "heat_demand", "valve_position", "valve_opening")
+_PID_NAME_EXCLUDES = (
+    "target", "setpoint", "set_point", "offset", "min", "max", "limit", "window",
+    "kp", "ki", "kd", "gain", "threshold", "calibration", "mode", "time", "interval",
+)
+
+
+def parse_percentage(value: Any) -> float | None:
+    """Return value as a number from 0 to 100, or None if it is not one."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if 0 <= number <= 100 else None
+
+
+def detect_pid_attribute(attributes: Mapping[str, Any]) -> tuple[str, float] | None:
+    """Find the attribute of a valve that reports its PID heating demand.
+
+    Known vendor names win; otherwise attributes whose name looks like a demand or
+    valve-opening value are used. Only numeric values from 0 to 100 are accepted.
+    """
+    for name in PID_ATTRIBUTE_CANDIDATES:
+        value = parse_percentage(attributes.get(name))
+        if value is not None:
+            return name, value
+    for name in sorted(attributes):
+        lowered = str(name).lower()
+        if not any(hint in lowered for hint in _PID_NAME_HINTS):
+            continue
+        if any(excluded in lowered for excluded in _PID_NAME_EXCLUDES):
+            continue
+        value = parse_percentage(attributes[name])
+        if value is not None:
+            return str(name), value
+    return None
+
+
+def _normalize(text: Any) -> str:
+    return "_".join(str(text or "").lower().replace("-", "_").split())
+
+
+def _name_matches(key: str, candidate: str) -> bool:
+    return key == candidate or key.endswith("_" + candidate)
+
+
+def find_pid_entity(entries: Iterable[Mapping[str, Any]]) -> str | None:
+    """Pick the sensor that reports PID heating demand from a device's entities.
+
+    Each entry needs ``entity_id`` and may have ``translation_key``, ``name``,
+    ``unique_id`` and ``unit``. Sensors with a known demand name win in the order of
+    ``PID_ATTRIBUTE_CANDIDATES``; otherwise names that look like a demand are used.
+    Sensors measured in anything but percent are ignored.
+    """
+    best: tuple[int, str] | None = None
+    for entry in entries:
+        entity_id = str(entry.get("entity_id") or "")
+        if not entity_id.startswith("sensor."):
+            continue
+        unit = entry.get("unit")
+        if unit not in (None, "%"):
+            continue
+        keys = {
+            _normalize(entry.get("translation_key")),
+            _normalize(entry.get("name")),
+            _normalize(entity_id.split(".", 1)[1]),
+            _normalize(entry.get("unique_id")),
+        }
+        keys.discard("")
+        score = 0
+        for rank, candidate in enumerate(PID_ATTRIBUTE_CANDIDATES):
+            if any(_name_matches(key, candidate) for key in keys):
+                score = 1000 - rank
+                break
+        if not score:
+            fuzzy = [
+                key
+                for key in keys
+                if any(hint in key for hint in _PID_NAME_HINTS)
+                and not any(excluded in key for excluded in _PID_NAME_EXCLUDES)
+            ]
+            if fuzzy:
+                score = 1
+        if score and (
+            best is None or score > best[0] or (score == best[0] and entity_id < best[1])
+        ):
+            best = (score, entity_id)
+    return best[1] if best else None
 
 
 def valve_report_is_stale(
@@ -29,6 +136,7 @@ class ValveState:
     current_temp: float | None
     target_temp: float | None
     pid_demand: float | None = None
+    pid_source: str | None = None
 
 
 def valve_calls_for_heat(valve: ValveState, hysteresis: float, currently_calling: bool) -> bool:

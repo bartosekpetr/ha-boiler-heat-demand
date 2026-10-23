@@ -6,7 +6,7 @@ Home Assistant custom integration (HACS) that switches a **gas boiler relay** ba
 
 ## How it works
 
-1. **Select valves and group them into rooms** â€“ any `climate` entities. Valves in the same room are grouped in the setup (optionally with a room temperature sensor); ungrouped valves are each their own room. Everything below works per **room**.
+1. **Select valve devices and group them into rooms** â€“ pick the thermostatic valve devices; the `climate` entity of each device is used (climate entities without a device can be added separately). Valves in the same room are grouped in the setup (optionally with a room temperature sensor); ungrouped valves are each their own room. Everything below works per **room**.
 2. **Room state** â€“ temperature is the room sensor if set, otherwise the median of its valves (one radiator-warmed valve can't skew it). The room target is the highest setpoint among its active valves. A room whose valves are all `off` never counts; if only some valves fail, the room keeps working from the others.
 3. **Is a room requesting heat?** â€“ any of its valves has `hvac_action == heating`; valves without an action use the room temperature vs target with hysteresis.
 4. **Demand mode** (configurable):
@@ -50,7 +50,7 @@ HACS â†’ Custom repositories â†’ add this repo (Integration) â†’ 
 | Option | Default |
 |---|---|
 | Demand mode | Valve count |
-| PID climate attribute | none (set this to the attribute exposed by your TRVs) |
+| PID demand source | Detected automatically per valve device |
 | PID start / stop demand (PID mode) | 20 / 5 % |
 | Rooms required to start | 1 |
 | Start / stop deficit (deficit mode) | 0.5 / 0.1 Â°C |
@@ -67,7 +67,9 @@ HACS â†’ Custom repositories â†’ add this repo (Integration) â†’ 
 
 Stale valves are treated as unavailable. The timeout uses Home Assistant's last reported time, falling back to the last state-change time on older Home Assistant versions.
 
-For PID mode, configure the **climate attribute** that contains each TRV's PID heating demand (the attribute name is vendor-specific). Values must be numeric percentages from 0 to 100; missing or out-of-range values are ignored. The integration combines active valves by taking the highest value, so one room with a strong heat request can start the boiler. When no active valve provides a valid value, ordinary valve-count logic is used as a fallback. Minimum on/off times and low-temperature safety still apply.
+For PID mode, nothing needs to be configured. In setup you pick the valve **devices** (for example *Chodba vstup*); the integration takes the `climate` entity from each device and finds the device's **PI heating demand** sensor (for example `sensor.chodba_vstup_pi_heating_demand`) on its own. The sensor is recognised by its name, translation key or unique id, so renamed entity IDs keep working; it must be a sensor reporting a percentage from 0 to 100. If a device has no such sensor, the integration falls back to a demand attribute on the climate entity (known names such as `pi_heating_demand`, `pid_demand`, `pi_output`, `heating_demand`, `valve_opening_degree` and `valve_position`, then other names that look like a demand or valve-opening value; targets, offsets, limits and PID gains are ignored). Valves can be mixed freely, and the *Maximum PID demand* sensor lists the source used for each valve (`pid_source_by_valve`, either a sensor entity or an attribute name). Valves without any PID source are simply skipped. The integration combines active valves by taking the highest value, so one room with a strong heat request can start the boiler. When no active valve provides a valid value, ordinary valve-count logic is used as a fallback. Minimum on/off times and low-temperature safety still apply.
+
+**Upgrading:** existing installations keep working without changes. They stored climate entity IDs, and the PI heating demand sensor is looked up from each climate entity's device automatically. A manual attribute name set in an earlier beta is still honoured first. When you open the options, devices are pre-selected from your current valves; climate entities that do not belong to a device stay in the optional *Other valve climate entities* field.
 
 The cumulative sensors are live sums, not running totals over time. Cumulative PID demand sums every valid active-valve PID value (so it may exceed 100%). Cumulative temperature delta sums `max(0, target - current)` for each active room with readable temperatures; rooms at or above target contribute zero. The Maximum PID demand sensor reports the single highest active-valve value and remains separate from the cumulative sensor.
 

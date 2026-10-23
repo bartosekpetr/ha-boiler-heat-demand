@@ -3,16 +3,16 @@
     "step": {
       "user": {
         "title": "Boiler heat demand",
-        "description": "Pick the boiler relay and the thermostatic valves that can call for heat.",
+        "description": "Pick the boiler relay and the thermostatic valve devices. The climate entity and the PI heating demand sensor are found automatically on each device.",
         "data": {
           "relay_entity": "Boiler relay (switch)",
-          "valve_entities": "Thermostatic valves (climate)",
+          "valve_devices": "Thermostatic valve devices",
+          "valve_entities": "Other valve climate entities (optional, only for climate entities that have no device)",
           "edit_rooms": "Redefine room grouping",
           "demand_mode": "How demand is evaluated",
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
           "stop_deficit": "Stop when largest deficit falls to (deficit mode)",
-          "pid_demand_attribute": "Climate attribute containing PID demand (0–100%)",
           "pid_start_percent": "Start when PID demand reaches",
           "pid_stop_percent": "Stop when PID demand falls to",
           "min_on_minutes": "Minimum on time",
@@ -40,6 +40,8 @@
     },
     "error": {
       "room_incomplete": "Enter both a room name and at least one valve.",
+      "no_valves": "Select at least one valve device or climate entity.",
+      "device_without_climate": "A selected device has no climate entity.",
       "room_duplicate": "That room name or one of its valves is already used.",
       "invalid_pid_thresholds": "PID start demand must be greater than or equal to PID stop demand."
     },
@@ -51,13 +53,13 @@
         "title": "Boiler heat demand",
         "data": {
           "relay_entity": "Boiler relay (switch)",
-          "valve_entities": "Thermostatic valves (climate)",
+          "valve_devices": "Thermostatic valve devices",
+          "valve_entities": "Other valve climate entities (optional, only for climate entities that have no device)",
           "edit_rooms": "Redefine room grouping",
           "demand_mode": "How demand is evaluated",
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
           "stop_deficit": "Stop when largest deficit falls to (deficit mode)",
-          "pid_demand_attribute": "Climate attribute containing PID demand (0–100%)",
           "pid_start_percent": "Start when PID demand reaches",
           "pid_stop_percent": "Stop when PID demand falls to",
           "min_on_minutes": "Minimum on time",
@@ -84,6 +86,8 @@
       }
     },
     "error": {
+      "no_valves": "Select at least one valve device or climate entity.",
+      "device_without_climate": "A selected device has no climate entity.",
       "invalid_pid_thresholds": "PID start demand must be greater than or equal to PID stop demand."
     }
   },

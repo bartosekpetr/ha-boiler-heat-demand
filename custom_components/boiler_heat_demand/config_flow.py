@@ -23,7 +23,6 @@ from .const import (
     CONF_MIN_VALVES,
     CONF_NOTIFY,
     CONF_OUTDOOR,
-    CONF_PID_ATTRIBUTE,
     CONF_PID_START,
     CONF_PID_STOP,
     CONF_RELAY,
@@ -33,6 +32,7 @@ from .const import (
     CONF_START_DEFICIT,
     CONF_STOP_DEFICIT,
     CONF_VALVE_FAILSAFE,
+    CONF_VALVE_DEVICES,
     CONF_VALVES,
     CONF_VALVE_TIMEOUT,
     DEFAULT_DEMAND_MODE,
@@ -59,6 +59,36 @@ from .demand import (
     MODE_DEFICIT,
     MODE_PID,
 )
+from .devices import climate_entities_for_devices, split_valves_by_device
+
+
+def _valve_fields(hass, current_valves: list[str]) -> dict:
+    """Valve devices (preferred) plus climate entities that have no device."""
+    devices, others = split_valves_by_device(hass, list(current_valves))
+    return {
+        vol.Optional(CONF_VALVE_DEVICES, description={"suggested_value": devices or None}): selector.DeviceSelector(
+            selector.DeviceSelectorConfig(
+                multiple=True, entity=selector.EntityFilterSelectorConfig(domain="climate")
+            )
+        ),
+        vol.Optional(CONF_VALVES, description={"suggested_value": others or None}): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="climate", multiple=True)
+        ),
+    }
+
+
+def _resolve_valves(hass, user_input: dict[str, Any]) -> str | None:
+    """Turn the selected devices into climate entities; returns an error key or None."""
+    devices = list(user_input.pop(CONF_VALVE_DEVICES, None) or [])
+    others = list(user_input.get(CONF_VALVES) or [])
+    climates, without_climate = climate_entities_for_devices(hass, devices)
+    if without_climate:
+        return "device_without_climate"
+    valves = list(dict.fromkeys([*climates, *others]))
+    if not valves:
+        return "no_valves"
+    user_input[CONF_VALVES] = valves
+    return None
 
 
 def _minutes(default: int) -> selector.NumberSelector:
@@ -105,7 +135,6 @@ def _tuning_schema(d: dict[str, Any]) -> dict:
         ),
         vol.Required(CONF_START_DEFICIT, default=d.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT)): _degrees(10),
         vol.Required(CONF_STOP_DEFICIT, default=d.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT)): _degrees(10),
-        vol.Optional(CONF_PID_ATTRIBUTE, description={"suggested_value": d.get(CONF_PID_ATTRIBUTE, "")}): selector.TextSelector(),
         vol.Required(CONF_PID_START, default=d.get(CONF_PID_START, DEFAULT_PID_START)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0, max=100, step=1, mode="box", unit_of_measurement="%")
         ),
@@ -194,29 +223,30 @@ class BoilerConfigFlow(_RoomsMixin, config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
+            error = None
             if float(user_input[CONF_PID_START]) < float(user_input[CONF_PID_STOP]):
+                error = "invalid_pid_thresholds"
+            else:
+                error = _resolve_valves(self.hass, user_input)
+            if error:
                 return self.async_show_form(
                     step_id="user",
                     data_schema=vol.Schema(self._user_schema()),
-                    errors={"base": "invalid_pid_thresholds"},
+                    errors={"base": error},
                 )
             await self.async_set_unique_id(user_input[CONF_RELAY])
             self._abort_if_unique_id_configured()
-            user_input[CONF_PID_ATTRIBUTE] = (user_input.get(CONF_PID_ATTRIBUTE) or "").strip()
             self._data = dict(user_input)
             self._rooms = []
             return await self.async_step_rooms()
         return self.async_show_form(step_id="user", data_schema=vol.Schema(self._user_schema()))
 
-    @staticmethod
-    def _user_schema() -> dict:
+    def _user_schema(self) -> dict:
         return {
             vol.Required(CONF_RELAY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["switch", "input_boolean"])
             ),
-            vol.Required(CONF_VALVES): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="climate", multiple=True)
-            ),
+            **_valve_fields(self.hass, []),
             **_tuning_schema({}),
         }
 
@@ -233,13 +263,17 @@ class BoilerOptionsFlow(_RoomsMixin, config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         cur = {**self.config_entry.data, **self.config_entry.options}
         if user_input is not None:
+            error = None
             if float(user_input[CONF_PID_START]) < float(user_input[CONF_PID_STOP]):
+                error = "invalid_pid_thresholds"
+            else:
+                error = _resolve_valves(self.hass, user_input)
+            if error:
                 return self.async_show_form(
                     step_id="init",
                     data_schema=vol.Schema(self._options_schema(cur)),
-                    errors={"base": "invalid_pid_thresholds"},
+                    errors={"base": error},
                 )
-            user_input[CONF_PID_ATTRIBUTE] = (user_input.get(CONF_PID_ATTRIBUTE) or "").strip()
             redefine = user_input.pop(CONF_EDIT_ROOMS, False)
             self._data = dict(user_input)
             if redefine:
@@ -249,15 +283,12 @@ class BoilerOptionsFlow(_RoomsMixin, config_entries.OptionsFlow):
             return await self._finish()
         return self.async_show_form(step_id="init", data_schema=vol.Schema(self._options_schema(cur)))
 
-    @staticmethod
-    def _options_schema(cur: dict[str, Any]) -> dict:
+    def _options_schema(self, cur: dict[str, Any]) -> dict:
         return {
             vol.Required(CONF_RELAY, default=cur[CONF_RELAY]): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["switch", "input_boolean"])
             ),
-            vol.Required(CONF_VALVES, default=cur[CONF_VALVES]): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="climate", multiple=True)
-            ),
+            **_valve_fields(self.hass, cur[CONF_VALVES]),
             vol.Required(CONF_EDIT_ROOMS, default=False): selector.BooleanSelector(),
             **_tuning_schema(cur),
         }

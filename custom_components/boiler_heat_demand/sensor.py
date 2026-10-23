@@ -141,6 +141,10 @@ class MaximumPidDemandSensor(SensorEntity):
         value = self._controller.max_pid_demand
         return None if value is None else round(value, 1)
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"pid_source_by_valve": dict(self._controller.pid_sources)}
+
 
 class CumulativePidDemandSensor(SensorEntity):
     """Sum of valid PID demand percentages from active valves."""

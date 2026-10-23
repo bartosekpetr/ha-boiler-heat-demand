@@ -11,7 +11,8 @@ Inspect `git status` before editing. Preserve existing worktree changes and do n
 - `custom_components/boiler_heat_demand/demand.py` contains pure, Home-Assistant-independent demand and room logic. Keep it unit-testable.
 - `controller.py` reads Home Assistant states, aggregates rooms, applies demand/failsafe/safety/learning rules, drives and checks the relay, and publishes updates to entities.
 - `learning.py` contains the persisted per-room thermal learner.
-- `config_flow.py` defines setup/options and room grouping.
+- `config_flow.py` defines setup/options (valve device selection) and room grouping.
+- `devices.py` resolves valve devices to climate entities and finds each device's PID heating demand sensor through the registries.
 - `binary_sensor.py`, `sensor.py`, and `button.py` define platform entities.
 - `__init__.py` sets up and unloads the controller. `device_info(entry)` groups every entity for a config entry under one device named **Automated Boiler**.
 - `const.py` holds configuration keys, defaults, and platform names.
@@ -19,7 +20,8 @@ Inspect `git status` before editing. Preserve existing worktree changes and do n
 ## Current behavior and entity contract
 
 - Valves are grouped into configured rooms; ungrouped valves each form a room. A configured room uses its temperature sensor when available, otherwise the median active-valve temperature, and the highest active-valve target.
-- Demand modes are valve/room count, largest temperature deficit, and PID demand. PID mode reads one configurable climate attribute from each valve; numeric values in `[0, 100]` are valid. The boiler starts/stops using configurable PID thresholds (defaults 20% / 5%). The maximum valid active-valve value is the demand signal. If no active valve has a valid PID value, PID mode falls back to valve-count demand.
+- Demand modes are valve/room count, largest temperature deficit, and PID demand. PID mode finds the demand of each valve in this order: (1) a manual `pid_demand_attribute` from older config entries, if present; (2) the **PID heating demand sensor entity of the valve's device**, found through the entity registry (`devices.pid_entity_for_climate` + `demand.find_pid_entity`: a `sensor` in `%`, matched by translation key, name, entity-id suffix or unique id against known names such as `pi_heating_demand`); (3) an attribute on the climate entity (`demand.detect_pid_attribute`: well-known names first, then conservative name hints; targets, offsets, limits or PID gains are excluded). Values must be numeric in `[0, 100]`. The chosen source per valve is exposed as `pid_source_by_valve` on the `Maximum PID demand` sensor. The boiler starts/stops using configurable PID thresholds (defaults 20% / 5%). The maximum valid active-valve value is the demand signal. If no active valve has a valid PID value, PID mode falls back to valve-count demand.
+- Valve selection: setup/options ask for valve **devices** (`valve_devices`, a `DeviceSelector` filtered to `climate`) plus an optional `valve_entities` field for climate entities without a device. They are resolved to climate entity IDs and stored only as `valve_entities`, so config entries from all earlier versions load unchanged. `devices.py` holds the registry glue (device -> climate entities, climate -> device, device -> PID sensor); the options form derives its pre-selected devices from the stored climate entities.
 - Existing minimum on/off lockouts, low-temperature safety override, valve timeout/failsafes, relay alerts, and optional room self-learning remain in effect.
 - Manual `Boiler on`, `Boiler off`, and `Resume automatic control` buttons are available. Manual control bypasses min on/off timers; manual off takes precedence over low-temperature safety. The override resets to automatic after HA restart.
 - `Maximum PID demand` is the pre-existing maximum-value sensor; keep its entity identity and behavior intact when adding aggregate sensors.
@@ -31,7 +33,7 @@ Inspect `git status` before editing. Preserve existing worktree changes and do n
 ## Tests and validation
 
 - Pure-logic tests: `tests/test_demand.py` and `tests/test_learning.py`.
-- Home Assistant glue tests: `tests/test_ha_glue.py` cover PID parsing/relay behavior, aggregate sensor values, and shared device association. They use `pytest-homeassistant-custom-component` and run on Linux; the module skips on Windows because Home Assistant's test harness is unsupported there.
+- Home Assistant glue tests: `tests/test_ha_glue.py` cover PID source resolution (device sensor, attribute fallback, legacy entries) using real device/entity registries, relay behavior, aggregate sensor values, and shared device association. They use `pytest-homeassistant-custom-component` and run on Linux; the module skips on Windows because Home Assistant's test harness is unsupported there.
 - Windows/local validation:
   - `py -3 -m pytest -q tests`
   - `py -3 -m compileall -q custom_components tests`

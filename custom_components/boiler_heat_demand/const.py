@@ -4,6 +4,7 @@ DOMAIN = "boiler_heat_demand"
 
 CONF_RELAY = "relay_entity"
 CONF_VALVES = "valve_entities"
+CONF_VALVE_DEVICES = "valve_devices"
 CONF_MIN_VALVES = "min_valves"
 CONF_MIN_ON = "min_on_minutes"
 CONF_MIN_OFF = "min_off_minutes"

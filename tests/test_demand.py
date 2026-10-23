@@ -13,6 +13,80 @@ spec.loader.exec_module(demand)
 ValveState, valve_calls_for_heat, decide = demand.ValveState, demand.valve_calls_for_heat, demand.decide
 valve_report_is_stale = demand.valve_report_is_stale
 demand_met, valve_deficit, valve_is_too_cold = demand.demand_met, demand.valve_deficit, demand.valve_is_too_cold
+detect_pid_attribute = demand.detect_pid_attribute
+find_pid_entity = demand.find_pid_entity
+
+
+def ent(entity_id, name=None, translation_key=None, unique_id=None, unit="%"):
+    return dict(entity_id=entity_id, name=name, translation_key=translation_key,
+                unique_id=unique_id, unit=unit)
+
+
+def test_find_pid_entity_in_the_chodba_vstup_device():
+    # Entities of the ZHA iTRV "Chodba vstup": climate is handled elsewhere.
+    entries = [
+        ent("climate.chodba_vstup", unit=None),
+        ent("sensor.chodba_vstup_hvac_action", "HVAC action", unit=None),
+        ent("sensor.chodba_vstup_battery", "Battery"),
+        ent("number.chodba_vstup_local_temperature_offset", "Local temperature offset", unit="°C"),
+        ent("sensor.chodba_vstup_pi_heating_demand", "Pi heating demand"),
+    ]
+    assert find_pid_entity(entries) == "sensor.chodba_vstup_pi_heating_demand"
+
+
+def test_find_pid_entity_survives_renaming_by_using_translation_key_or_name():
+    renamed = ent("sensor.hallway_valve_demand", "Pi heating demand")
+    assert find_pid_entity([renamed]) == "sensor.hallway_valve_demand"
+    keyed = ent("sensor.x", "Whatever", translation_key="pi_heating_demand")
+    assert find_pid_entity([keyed]) == "sensor.x"
+    by_unique_id = ent("sensor.y", None, unique_id="b4:e3:f9:ff:fe:59:26:97-1-513-pi_heating_demand")
+    assert find_pid_entity([by_unique_id]) == "sensor.y"
+
+
+def test_find_pid_entity_prefers_known_names_then_falls_back_to_hints():
+    entries = [ent("sensor.a_heating_demand", "Heating demand"),
+               ent("sensor.a_pi_heating_demand", "Pi heating demand")]
+    assert find_pid_entity(entries) == "sensor.a_pi_heating_demand"
+    assert find_pid_entity([ent("sensor.a_trv_pid_output_percent", "TRV PID output percent")]) == "sensor.a_trv_pid_output_percent"
+
+
+def test_find_pid_entity_ignores_wrong_units_domains_and_settings():
+    assert find_pid_entity([]) is None
+    assert find_pid_entity([ent("sensor.a_pi_heating_demand", "Pi heating demand", unit="°C")]) is None
+    assert find_pid_entity([ent("number.a_pi_heating_demand", "Pi heating demand")]) is None
+    assert find_pid_entity([ent("sensor.a_pid_kp", "PID kp"), ent("sensor.a_battery", "Battery")]) is None
+    assert find_pid_entity([ent("sensor.a_pi_heating_demand", "Pi heating demand", unit=None)]) == "sensor.a_pi_heating_demand"
+
+
+def test_detect_pid_attribute_known_vendor_names():
+    assert detect_pid_attribute({"pi_heating_demand": 42}) == ("pi_heating_demand", 42.0)
+    assert detect_pid_attribute({"valve_position": "17.5"}) == ("valve_position", 17.5)
+    assert detect_pid_attribute({"valve_opening_degree": 0}) == ("valve_opening_degree", 0.0)
+
+
+def test_detect_pid_attribute_prefers_known_names_over_fuzzy_matches():
+    attrs = {"my_pid_value": 80, "pi_heating_demand": 30}
+    assert detect_pid_attribute(attrs) == ("pi_heating_demand", 30.0)
+
+
+def test_detect_pid_attribute_falls_back_to_name_hints():
+    assert detect_pid_attribute({"trv_pid_output_percent": 55}) == ("trv_pid_output_percent", 55.0)
+
+
+def test_detect_pid_attribute_ignores_settings_and_invalid_values():
+    attrs = {
+        "pid_kp": 40,
+        "pid_target_temperature": 21,
+        "max_valve_position": 100,
+        "temperature": 21,
+        "current_temperature": 20,
+        "hvac_action": "heating",
+        "pi_heating_demand": 101,
+        "valve_position": True,
+        "heating_demand": "n/a",
+    }
+    assert detect_pid_attribute(attrs) is None
+    assert detect_pid_attribute({}) is None
 
 
 def v(**kw):
