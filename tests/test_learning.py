@@ -64,3 +64,47 @@ def test_model_roundtrip():
     m = RoomModel(heat_rate=1.2, cycles=4, coast_rise=0.5)
     assert RoomModel.from_dict(m.to_dict()) == m
     assert anticipation(m) == 0.5
+
+
+def test_corrupt_or_hostile_stored_model_is_sanitised():
+    bad = {
+        "heat_rate": "fast", "cool_rate": float("nan"), "cool_coeff": None, "coast_rise": 99,
+        "overshoot": float("inf"), "lag_min": None, "start_adj": -7, "stop_bias": True,
+        "cycles": "3", "unknown": {"x": 1},
+    }
+    model = RoomModel.from_dict(bad)
+    assert model.heat_rate is None and model.cool_rate is None and model.cool_coeff is None
+    assert model.coast_rise == learning.MAX_ANTICIPATION
+    assert model.overshoot == 0.0 and model.lag_min == 10.0
+    assert model.start_adj == -0.3 and model.stop_bias == 0.0
+    assert model.cycles == 0
+    # None for a required field falls back to the default instead of crashing learned_call later
+    assert learned_call(model, True, False, 20.0, 21.0, None, 0.5) is True
+    for not_a_model in (None, [], "x", 5):
+        assert RoomModel.from_dict(not_a_model) == RoomModel()
+
+
+def test_stored_values_are_clamped_to_plausible_ranges():
+    model = RoomModel.from_dict({"heat_rate": 500, "lag_min": 0, "stop_bias": 9, "cycles": 10**12})
+    assert model.heat_rate == 10.0 and model.lag_min == 1.0
+    assert model.stop_bias == 1.0 and model.cycles == learning.MAX_CYCLES
+
+
+def test_non_finite_readings_do_not_touch_the_model():
+    learner = RoomLearner()
+    before = learner.model.to_dict()
+    for temp, target, outdoor in ((float("nan"), 21.0, None), (20.0, float("inf"), None), (float("-inf"), 21.0, 5.0)):
+        learner.observe(0.0, temp, target, True, outdoor, 0.5)
+        learner.observe(2000.0, temp, target, False, outdoor, 0.5)
+    assert learner.model.to_dict() == before
+
+
+def test_implausible_overshoot_spike_is_not_learned():
+    learner = RoomLearner()
+    learner.observe(0.0, 19.0, 21.0, True, None, 0.5)
+    learner.observe(1000.0, 20.5, 21.0, True, None, 0.5)
+    learner.observe(1100.0, 20.8, 21.0, False, None, 0.5)  # heating stops, coast phase starts
+    learner.observe(1200.0, 45.0, 21.0, False, None, 0.5)  # glitch spike
+    learner.observe(1300.0, 20.9, 21.0, False, None, 0.5)
+    assert learner.model.cycles == 0 and learner.model.stop_bias == 0.0
+    assert learner.model.overshoot == 0.0

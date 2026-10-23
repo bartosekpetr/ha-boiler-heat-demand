@@ -3,7 +3,57 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import math
 from typing import Any, Iterable, Mapping
+
+TEMPERATURE_MIN_C = -50.0
+TEMPERATURE_MAX_C = 60.0
+# An external room sensor may legitimately report only every hour or two, so it gets a
+# longer freshness window than a valve; 0 (staleness disabled) is still honoured.
+SENSOR_MIN_TIMEOUT_S = 7200.0
+
+
+def _finite(value: float | None) -> bool:
+    return value is not None and math.isfinite(value)
+
+
+def parse_temperature(value: Any, unit: str | None = None) -> float | None:
+    """Return a plausible temperature in degrees C, or None.
+
+    Rejects booleans, NaN/inf, unknown units and values outside -50..60 degC so a
+    faulty or hostile source cannot disable the safety logic or poison learning.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    if unit in (None, "", "°C", "C", "℃"):
+        pass
+    elif unit in ("°F", "F"):
+        number = (number - 32.0) * 5.0 / 9.0
+    elif unit == "K":
+        number -= 273.15
+    else:
+        return None
+    return number if TEMPERATURE_MIN_C <= number <= TEMPERATURE_MAX_C else None
+
+
+def sensor_timeout_seconds(valve_timeout_seconds: float) -> float:
+    """Freshness window for external room sensors (0 keeps staleness checks disabled)."""
+    if valve_timeout_seconds <= 0:
+        return 0.0
+    return max(valve_timeout_seconds, SENSOR_MIN_TIMEOUT_S)
+
+
+def manual_override_expired(
+    set_at: float | None, now: float, timeout_seconds: float
+) -> bool:
+    """True when a manual boiler override has outlived its timeout (0 = never expires)."""
+    return timeout_seconds > 0 and set_at is not None and now - set_at >= timeout_seconds
 
 # Well-known TRV attributes that report heating demand / valve opening as 0-100 %.
 PID_ATTRIBUTE_CANDIDATES = (
@@ -150,7 +200,7 @@ def valve_calls_for_heat(valve: ValveState, hysteresis: float, currently_calling
         return False
     if valve.hvac_action is not None:
         return valve.hvac_action == "heating"
-    if valve.current_temp is None or valve.target_temp is None:
+    if not _finite(valve.current_temp) or not _finite(valve.target_temp):
         return False
     if currently_calling:
         return valve.current_temp < valve.target_temp
@@ -170,7 +220,7 @@ def valve_deficit(valve: ValveState) -> float | None:
     """Degrees below target for a valve that is available and not off, else None."""
     if not valve.available or valve.hvac_mode in (None, "off"):
         return None
-    if valve.current_temp is None or valve.target_temp is None:
+    if not _finite(valve.current_temp) or not _finite(valve.target_temp):
         return None
     return valve.target_temp - valve.current_temp
 
@@ -179,7 +229,7 @@ def valve_is_too_cold(valve: ValveState, safety_min_temp: float) -> bool:
     """True when an active valve's room is at or below the safety temperature (0 disables)."""
     if safety_min_temp <= 0 or not valve.available or valve.hvac_mode in (None, "off"):
         return False
-    return valve.current_temp is not None and valve.current_temp <= safety_min_temp
+    return _finite(valve.current_temp) and valve.current_temp <= safety_min_temp
 
 
 def demand_met(
@@ -300,9 +350,9 @@ def aggregate_room(
     if not active:
         return RoomState(True, False, False, None, None)
 
-    temps = [v.current_temp for v in active if v.current_temp is not None]
-    temp = sensor_temp if sensor_temp is not None else (_median(temps) if temps else None)
-    targets = [v.target_temp for v in active if v.target_temp is not None]
+    temps = [v.current_temp for v in active if _finite(v.current_temp)]
+    temp = sensor_temp if _finite(sensor_temp) else (_median(temps) if temps else None)
+    targets = [v.target_temp for v in active if _finite(v.target_temp)]
     target = max(targets) if targets else None
     pid_values = [v.pid_demand for v in active if v.pid_demand is not None]
     pid_demand = max(pid_values) if pid_values else None

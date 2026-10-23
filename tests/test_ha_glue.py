@@ -1,16 +1,16 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 if sys.platform == "win32":
     pytest.skip("Home Assistant integration tests run on Linux in CI", allow_module_level=True)
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
-from custom_components.boiler_heat_demand import device_info
+from custom_components.boiler_heat_demand import async_remove_entry, device_info
 from custom_components.boiler_heat_demand.binary_sensor import HeatDemandSensor
 from custom_components.boiler_heat_demand.button import (
     BoilerOffButton,
@@ -284,6 +284,194 @@ async def test_climate_attribute_is_used_when_the_device_has_no_pid_sensor(hass)
 
     assert snapshot.pid_demand == 47
     assert snapshot.pid_source == "pi_heating_demand"
+
+
+def _hall_controller(hass, **options):
+    """Controller for one room with an external sensor; the relay command is mocked."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "relay_entity": "switch.boiler",
+            "valve_entities": ["climate.hall"],
+            "rooms": [{"name": "Hall", "valves": ["climate.hall"], "temp_sensor": "sensor.hall_temp"}],
+            "learning_enabled": False,
+            "valve_timeout_minutes": 0,
+            **options,
+        },
+    )
+    controller = BoilerController(hass, entry)
+    controller._command = AsyncMock()
+    return controller
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+@pytest.mark.parametrize("bad_value", ["nan", "inf", "-inf", "999", "garbage"])
+async def test_invalid_room_sensor_falls_back_to_valve_and_keeps_frost_protection(hass, bad_value):
+    hass.states.async_set("switch.boiler", "off")
+    hass.states.async_set(
+        "climate.hall", "heat", {"hvac_action": "idle", "current_temperature": 5, "temperature": 21}
+    )
+    hass.states.async_set("sensor.hall_temp", bad_value, {"unit_of_measurement": "°C"})
+    controller = _hall_controller(hass)
+
+    await controller.async_evaluate()
+
+    assert controller.safety_override
+    controller._command.assert_awaited_once_with("switch.boiler", True)
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_frost_protection_uses_room_sensor_when_all_valves_are_offline(hass):
+    hass.states.async_set("switch.boiler", "off")
+    hass.states.async_set("climate.hall", "unavailable")
+    hass.states.async_set("sensor.hall_temp", "5.0", {"unit_of_measurement": "°C"})
+    controller = _hall_controller(hass)
+
+    await controller.async_evaluate()
+
+    assert controller.safety_override
+    controller._command.assert_awaited_once_with("switch.boiler", True)
+
+    hass.states.async_set("sensor.hall_temp", "19.0", {"unit_of_measurement": "°C"})
+    await controller.async_evaluate()
+    assert not controller.safety_override
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_room_sensor_units_are_converted_and_stale_sensors_ignored(hass):
+    controller = _hall_controller(hass)
+    hass.states.async_set("sensor.hall_temp", "41", {"unit_of_measurement": "°F"})
+    now = datetime.now(timezone.utc)
+
+    assert abs(controller._sensor_temp("sensor.hall_temp", now, 7200) - 5.0) < 1e-9
+    assert controller._sensor_temp("sensor.hall_temp", now + timedelta(hours=3), 7200) is None
+    assert controller._sensor_temp("sensor.hall_temp", now + timedelta(hours=3), 0) is not None
+    hass.states.async_set("sensor.hall_temp", "41", {"unit_of_measurement": "%"})
+    assert controller._sensor_temp("sensor.hall_temp") is None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_valve_temperatures_follow_the_home_assistant_unit_system(hass):
+    from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
+
+    hass.config.units = US_CUSTOMARY_SYSTEM
+    hass.states.async_set(
+        "climate.hall", "heat", {"current_temperature": 68, "temperature": 71.6, "hvac_action": "idle"}
+    )
+    controller = object.__new__(BoilerController)
+    controller.hass = hass
+
+    snapshot = controller._snapshot("climate.hall", datetime.now(timezone.utc), 0, None)
+
+    assert abs(snapshot.current_temp - 20.0) < 1e-9
+    assert abs(snapshot.target_temp - 22.0) < 1e-9
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_manual_override_expires(hass):
+    hass.states.async_set("switch.boiler", "off")
+    hass.states.async_set(
+        "climate.hall", "heat", {"hvac_action": "idle", "current_temperature": 20, "temperature": 21}
+    )
+    hass.states.async_set("sensor.hall_temp", "20", {"unit_of_measurement": "°C"})
+    controller = _hall_controller(hass, manual_override_minutes=30)
+
+    await controller.async_set_manual_override(True)
+    assert controller.manual_override is True
+    assert 0 < controller.manual_override_seconds_left <= 1800
+    controller._command.assert_awaited_once_with("switch.boiler", True)
+
+    controller._manual_set_at -= 1801
+    await controller.async_evaluate()
+    assert controller.manual_override is None
+    assert controller.manual_override_seconds_left is None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_manual_override_can_be_set_never_to_expire(hass):
+    hass.states.async_set("switch.boiler", "off")
+    hass.states.async_set("climate.hall", "heat", {"hvac_action": "idle"})
+    controller = _hall_controller(hass, manual_override_minutes=0)
+
+    await controller.async_set_manual_override(False)
+    controller._manual_set_at -= 10**7
+    await controller.async_evaluate()
+
+    assert controller.manual_override is False
+    assert controller.manual_override_seconds_left is None
+
+    await controller.async_resume_automatic()
+    assert controller.manual_override is None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_evaluation_failure_raises_an_alert_and_recovers(hass):
+    hass.states.async_set("switch.boiler", "off")
+    controller = _hall_controller(hass)
+    controller._raise_alert = MagicMock()
+    controller._clear_alert = MagicMock()
+
+    controller._async_evaluate = AsyncMock(side_effect=RuntimeError("boom"))
+    await controller.async_evaluate()
+
+    key, message = controller._raise_alert.call_args.args
+    assert key == "evaluation_failed" and "boom" in message and "switch.boiler" in message
+    controller._clear_alert.assert_not_called()
+
+    controller._async_evaluate = AsyncMock()
+    await controller.async_evaluate()
+    controller._clear_alert.assert_called_once_with("evaluation_failed")
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_one_failing_entity_does_not_block_the_other_listeners(hass):
+    controller = _hall_controller(hass)
+    seen = []
+
+    def broken():
+        raise RuntimeError("entity gone")
+
+    controller.add_listener(broken)
+    controller.add_listener(lambda: seen.append("ok"))
+
+    controller._publish(Decision(False, False, ()))
+
+    assert seen == ["ok"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_corrupt_learning_storage_does_not_break_loading(hass):
+    controller = _hall_controller(hass)
+    controller._store.async_load = AsyncMock(
+        return_value={"rooms": {"Hall": {"lag_min": None, "heat_rate": "fast", "cycles": 5}, 7: {}}}
+    )
+
+    await controller.async_load()
+
+    assert list(controller.learners) == ["Hall"]
+    assert controller.learners["Hall"].model.lag_min == 10.0
+    assert controller.learners["Hall"].model.heat_rate is None
+    assert controller.learners["Hall"].model.cycles == 5
+
+    for garbage in (None, [], "x", {"rooms": [1, 2]}):
+        controller.learners.clear()
+        controller._store.async_load = AsyncMock(return_value=garbage)
+        await controller.async_load()
+        assert controller.learners == {}
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_removing_the_integration_turns_a_running_relay_off(hass):
+    calls = async_mock_service(hass, "switch", "turn_off")
+    entry = MockConfigEntry(domain=DOMAIN, data={"relay_entity": "switch.boiler"})
+
+    hass.states.async_set("switch.boiler", "off")
+    await async_remove_entry(hass, entry)
+    assert calls == []
+
+    hass.states.async_set("switch.boiler", "on")
+    await async_remove_entry(hass, entry)
+    assert [c.data["entity_id"] for c in calls] == ["switch.boiler"]
 
 
 def test_entities_share_the_automated_boiler_device():

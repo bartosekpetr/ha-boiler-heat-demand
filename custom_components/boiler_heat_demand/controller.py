@@ -19,6 +19,7 @@ from .const import (
     CONF_DEMAND_MODE,
     CONF_HYSTERESIS,
     CONF_LEARNING,
+    CONF_MANUAL_TIMEOUT,
     CONF_MIN_OFF,
     CONF_MIN_ON,
     CONF_MIN_VALVES,
@@ -39,6 +40,7 @@ from .const import (
     DEFAULT_DEMAND_MODE,
     DEFAULT_HYSTERESIS,
     DEFAULT_LEARNING,
+    DEFAULT_MANUAL_TIMEOUT,
     DEFAULT_MIN_OFF,
     DEFAULT_MIN_ON,
     DEFAULT_MIN_VALVES,
@@ -67,20 +69,16 @@ from .demand import (
     decide,
     demand_met,
     detect_pid_attribute,
+    manual_override_expired,
     parse_percentage,
+    parse_temperature,
+    sensor_timeout_seconds,
     valve_report_is_stale,
 )
 from .devices import pid_entity_for_climate
 from .learning import RoomLearner, RoomModel, learned_call
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _float(value) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 class BoilerController:
@@ -102,6 +100,7 @@ class BoilerController:
         self.start_deficit = DEFAULT_START_DEFICIT
         self.stop_deficit = DEFAULT_STOP_DEFICIT
         self.manual_override: bool | None = None
+        self._manual_set_at: float | None = None
         self.max_pid_demand: float | None = None
         self.cumulative_temp_delta: float | None = None
         self.cumulative_pid_demand: float | None = None
@@ -113,9 +112,13 @@ class BoilerController:
         self._unsubs: list[Callable[[], None]] = []
 
     async def async_load(self) -> None:
-        data = await self._store.async_load() or {}
-        for entity_id, model in data.get("rooms", {}).items():
-            self.learners[entity_id] = RoomLearner(model=RoomModel.from_dict(model))
+        data = await self._store.async_load()
+        rooms = data.get("rooms") if isinstance(data, dict) else None
+        if not isinstance(rooms, dict):
+            return
+        for entity_id, model in rooms.items():
+            if isinstance(entity_id, str):
+                self.learners[entity_id] = RoomLearner(model=RoomModel.from_dict(model))
 
     def _learner(self, entity_id: str) -> RoomLearner:
         return self.learners.setdefault(entity_id, RoomLearner())
@@ -133,27 +136,55 @@ class BoilerController:
 
     async def async_set_manual_override(self, state: bool) -> None:
         self.manual_override = state
+        self._manual_set_at = time.monotonic()
         await self.async_evaluate()
 
     async def async_resume_automatic(self) -> None:
         self.manual_override = None
+        self._manual_set_at = None
         await self.async_evaluate()
+
+    @property
+    def manual_override_seconds_left(self) -> int | None:
+        """Seconds until the manual override expires; None if none is active or it never expires."""
+        timeout = self._manual_timeout_seconds()
+        if self.manual_override is None or self._manual_set_at is None or timeout <= 0:
+            return None
+        return max(0, int(timeout - (time.monotonic() - self._manual_set_at)))
+
+    def _manual_timeout_seconds(self) -> float:
+        return float(self._cfg.get(CONF_MANUAL_TIMEOUT, DEFAULT_MANUAL_TIMEOUT)) * 60
+
+    def _expire_manual_override(self) -> None:
+        if manual_override_expired(
+            self._manual_set_at, time.monotonic(), self._manual_timeout_seconds()
+        ):
+            _LOGGER.info("Manual boiler override expired, returning to automatic control")
+            self.manual_override = None
+            self._manual_set_at = None
 
     def _rooms(self, cfg: dict) -> list[RoomConfig]:
         return build_rooms(list(cfg[CONF_VALVES]), cfg.get(CONF_ROOMS))
 
-    def _sensor_temp(self, entity_id: str | None) -> float | None:
+    @property
+    def _temperature_unit(self) -> str:
+        return self.hass.config.units.temperature_unit
+
+    def _sensor_temp(
+        self, entity_id: str | None, now=None, timeout_seconds: float = 0
+    ) -> float | None:
+        """Plausible temperature in degC from a room sensor; None if missing, stale or invalid."""
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return None
-        return _float(state.state)
+        if now is not None:
+            last_reported = getattr(state, "last_reported", None) or state.last_updated
+            if valve_report_is_stale(last_reported, now, timeout_seconds):
+                return None
+        return parse_temperature(state.state, state.attributes.get("unit_of_measurement"))
 
     def _outdoor_temp(self, cfg: dict) -> float | None:
-        entity_id = cfg.get(CONF_OUTDOOR)
-        state = self.hass.states.get(entity_id) if entity_id else None
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return None
-        return _float(state.state)
+        return self._sensor_temp(cfg.get(CONF_OUTDOOR))
 
     @property
     def _cfg(self) -> dict:
@@ -223,22 +254,39 @@ class BoilerController:
                 pid_source, pid_demand = detected
         if pid_demand is None:
             pid_source = None
+        unit = self._temperature_unit
         return ValveState(
             entity_id,
             True,
             state.state,
             attrs.get("hvac_action"),
-            _float(attrs.get("current_temperature")),
-            _float(attrs.get("temperature")),
+            parse_temperature(attrs.get("current_temperature"), unit),
+            parse_temperature(attrs.get("temperature"), unit),
             pid_demand,
             pid_source,
         )
 
     async def async_evaluate(self) -> None:
+        """Run one control cycle; a failure raises a critical alert instead of silently stalling."""
+        try:
+            await self._async_evaluate()
+        except Exception as err:  # noqa: BLE001 - the relay must never be left unmanaged silently
+            _LOGGER.exception("Boiler control evaluation failed")
+            self._raise_alert(
+                "evaluation_failed",
+                f"Boiler control failed: {err}. The relay {self._cfg.get(CONF_RELAY)} keeps its "
+                "current state and is not being managed. Check the Home Assistant log.",
+            )
+        else:
+            self._clear_alert("evaluation_failed")
+
+    async def _async_evaluate(self) -> None:
+        self._expire_manual_override()
         cfg = self._cfg
         relay = cfg[CONF_RELAY]
         hysteresis = float(cfg.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS))
         timeout_seconds = float(cfg.get(CONF_VALVE_TIMEOUT, DEFAULT_VALVE_TIMEOUT)) * 60
+        sensor_timeout = sensor_timeout_seconds(timeout_seconds)
         failsafe = cfg.get(CONF_VALVE_FAILSAFE, DEFAULT_VALVE_FAILSAFE)
         mode = cfg.get(CONF_DEMAND_MODE, DEFAULT_DEMAND_MODE)
         safety_temp = float(cfg.get(CONF_SAFETY_MIN_TEMP, DEFAULT_SAFETY_MIN_TEMP))
@@ -279,13 +327,17 @@ class BoilerController:
                 self._snapshot(e, now, timeout_seconds, pid_attribute, self._pid_entity(e))
                 for e in room_cfg.valves
             ]
+            sensor_temp = self._sensor_temp(room_cfg.sensor, now, sensor_timeout)
             room = aggregate_room(
                 snaps,
                 hysteresis,
                 name in previously_calling,
-                self._sensor_temp(room_cfg.sensor),
+                sensor_temp,
             )
             if not room.available:
+                # A cold room sensor still triggers frost protection while its valves are offline.
+                if safety_temp > 0 and sensor_temp is not None and sensor_temp <= safety_temp:
+                    too_cold = True
                 # Every valve of the room is unresponsive: apply the configured failsafe.
                 if failsafe == FAILSAFE_HEAT or (
                     failsafe == FAILSAFE_HOLD and name in previously_calling
@@ -513,4 +565,7 @@ class BoilerController:
     def _publish(self, decision: Decision) -> None:
         self.decision = decision
         for cb in list(self._listeners):
-            cb()
+            try:
+                cb()
+            except Exception:  # noqa: BLE001 - one broken entity must not block the others
+                _LOGGER.exception("Updating a Boiler Heat Demand entity failed")

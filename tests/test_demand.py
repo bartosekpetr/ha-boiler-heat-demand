@@ -245,3 +245,56 @@ def test_build_rooms_groups_and_defaults():
     assert [r.name for r in rooms] == ["Living", "climate.c"]
     assert rooms[0].valves == ("climate.a", "climate.b") and rooms[0].sensor == "sensor.t"
     assert demand.build_rooms(["climate.a"], None)[0].valves == ("climate.a",)
+
+
+NAN, INF, NINF = float("nan"), float("inf"), float("-inf")
+
+
+def test_parse_temperature_rejects_non_finite_and_implausible_values():
+    for bad in ("nan", "inf", "-inf", NAN, INF, NINF, "abc", None, True, 61, -51, 500):
+        assert demand.parse_temperature(bad) is None, bad
+    assert demand.parse_temperature("21.5") == 21.5
+    assert demand.parse_temperature(0) == 0.0
+    assert demand.parse_temperature(-50) == -50.0 and demand.parse_temperature(60) == 60.0
+
+
+def test_parse_temperature_converts_units_and_rejects_unknown_ones():
+    assert abs(demand.parse_temperature(68, "°F") - 20.0) < 1e-9
+    assert abs(demand.parse_temperature(293.15, "K") - 20.0) < 1e-9
+    assert demand.parse_temperature(20, "°C") == 20.0
+    assert demand.parse_temperature(20, "%") is None
+    assert demand.parse_temperature(5, "m/s") is None
+    assert demand.parse_temperature(200, "°F") is None  # 93 degC is implausible
+
+
+def test_nan_room_sensor_falls_back_to_valve_temperature():
+    cold = v(current_temp=5.0, target_temp=21.0)
+    room = demand.aggregate_room([cold], 0.3, False, sensor_temp=NAN)
+    assert room.temp == 5.0
+    assert demand.aggregate_room([cold], 0.3, False, sensor_temp=NINF).temp == 5.0
+
+
+def test_non_finite_valve_values_never_count_as_heat_demand_or_deficit():
+    broken = v(current_temp=NAN, target_temp=21.0)
+    assert not valve_calls_for_heat(broken, 0.3, False)
+    assert valve_deficit(broken) is None
+    assert not valve_is_too_cold(broken, 8.0)
+    room = demand.aggregate_room([broken, v(current_temp=19.0, target_temp=NAN)], 0.3, False)
+    # only finite values contribute: the temperature comes from one valve, the target from the other
+    assert room.temp == 19.0 and room.target == 21.0
+    only_nan = demand.aggregate_room([v(current_temp=NAN, target_temp=NAN)], 0.3, False)
+    assert only_nan.temp is None and only_nan.target is None
+
+
+def test_sensor_timeout_is_longer_than_valve_timeout_but_stays_disableable():
+    assert demand.sensor_timeout_seconds(0) == 0
+    assert demand.sensor_timeout_seconds(1800) == 7200
+    assert demand.sensor_timeout_seconds(10800) == 10800
+
+
+def test_manual_override_expires_after_the_timeout():
+    expired = demand.manual_override_expired
+    assert not expired(None, 1000.0, 60)
+    assert not expired(100.0, 159.0, 60)
+    assert expired(100.0, 160.0, 60)
+    assert not expired(100.0, 10**9, 0)  # 0 means never

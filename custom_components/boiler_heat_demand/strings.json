@@ -21,6 +21,7 @@
           "safety_min_temp": "Low-temperature safety: heat when any active room is at or below (0 disables)",
           "valve_timeout_minutes": "Valve report timeout (0 disables)",
           "valve_failsafe": "If a valve does not respond",
+          "manual_override_minutes": "Manual boiler on/off expires after (0 = never)",
           "relay_timeout_minutes": "Raise critical alert if the relay is unavailable for",
           "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)",
           "learning_enabled": "Self-learning (per-room heating model)",
@@ -68,6 +69,7 @@
           "safety_min_temp": "Low-temperature safety: heat when any active room is at or below (0 disables)",
           "valve_timeout_minutes": "Valve report timeout (0 disables)",
           "valve_failsafe": "If a valve does not respond",
+          "manual_override_minutes": "Manual boiler on/off expires after (0 = never)",
           "relay_timeout_minutes": "Raise critical alert if the relay is unavailable for",
           "notify_service": "Critical notify service (optional, e.g. notify.mobile_app_phone)",
           "learning_enabled": "Self-learning (per-room heating model)",
@@ -103,6 +105,10 @@
     "relay_command_failed": {
       "title": "Boiler relay command failed",
       "description": "Switching {relay} failed. The relay may be stuck in its current state."
+    },
+    "evaluation_failed": {
+      "title": "Boiler control stopped",
+      "description": "The control logic for {relay} failed and the relay is no longer being managed. Check the Home Assistant log."
     }
   }
 }

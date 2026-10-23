@@ -10,6 +10,7 @@ Each room learns, from its own temperature readings:
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 
 MIN_WINDOW_S = 900  # rate samples span at least 15 min (sensors are coarse)
 MAX_WINDOW_S = 7200
@@ -19,6 +20,20 @@ READY_CYCLES = 3
 STEP = 0.1
 OVERSHOOT_TOLERANCE = 0.3
 MAX_ANTICIPATION = 2.0
+MAX_PLAUSIBLE_COAST = 10.0  # a larger rise/overshoot is a sensor glitch, not a cycle to learn from
+
+# field -> (low, high, may be None); every stored value is clamped to these on load.
+_FLOAT_FIELDS: dict[str, tuple[float, float, bool]] = {
+    "heat_rate": (0.0, 10.0, True),
+    "cool_rate": (0.0, 5.0, True),
+    "cool_coeff": (0.0, 5.0, True),
+    "coast_rise": (0.0, MAX_ANTICIPATION, False),
+    "overshoot": (0.0, MAX_PLAUSIBLE_COAST, False),
+    "lag_min": (1.0, 60.0, False),
+    "start_adj": (-0.3, 1.0, False),
+    "stop_bias": (-0.5, 1.0, False),
+}
+MAX_CYCLES = 1_000_000
 
 
 def _ewma(old: float | None, new: float, alpha: float = ALPHA) -> float:
@@ -27,6 +42,12 @@ def _ewma(old: float | None, new: float, alpha: float = ALPHA) -> float:
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def _finite_number(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
 
 
 @dataclass
@@ -50,8 +71,23 @@ class RoomModel:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RoomModel":
-        known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
-        return cls(**known)
+        """Load a stored model; corrupt, non-numeric or out-of-range fields are ignored/clamped."""
+        model = cls()
+        if not isinstance(data, dict):
+            return model
+        for name, (low, high, optional) in _FLOAT_FIELDS.items():
+            if name not in data:
+                continue
+            if data[name] is None and optional:
+                setattr(model, name, None)
+                continue
+            number = _finite_number(data[name])
+            if number is not None:
+                setattr(model, name, _clamp(number, low, high))
+        cycles = data.get("cycles")
+        if isinstance(cycles, int) and not isinstance(cycles, bool):
+            model.cycles = int(_clamp(cycles, 0, MAX_CYCLES))
+        return model
 
 
 def predicted_cool_rate(model: RoomModel, temp: float, outdoor: float | None) -> float:
@@ -126,7 +162,14 @@ class RoomLearner:
         start_deficit: float,
     ) -> None:
         """Feed one reading. `heating` is True while the boiler is on and the room is calling."""
-        if temp is None or target is None:
+        if outdoor is not None and not math.isfinite(outdoor):
+            outdoor = None
+        if (
+            temp is None
+            or target is None
+            or not math.isfinite(temp)
+            or not math.isfinite(target)
+        ):
             self._reset_window()
             return
         phase = "heat" if heating else "idle"
@@ -185,6 +228,8 @@ class RoomLearner:
         self._coast = False
         rise = max(0.0, self._peak - self._coast_start_temp)
         over = max(0.0, self._peak - self._coast_target)
+        if rise > MAX_PLAUSIBLE_COAST or over > MAX_PLAUSIBLE_COAST:
+            return
         m.coast_rise = _clamp(_ewma(m.coast_rise if m.cycles else None, rise), 0.0, MAX_ANTICIPATION)
         m.overshoot = _ewma(m.overshoot if m.cycles else None, over)
         m.cycles += 1

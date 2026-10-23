@@ -36,5 +36,7 @@ class HeatDemandSensor(BinarySensorEntity):
             "calling_rooms": list(self._controller.decision.calling),
             "max_temperature_deficit": self._controller.max_deficit,
             "safety_override": self._controller.safety_override,
+            "manual_override": {True: "on", False: "off"}.get(self._controller.manual_override),
+            "manual_override_seconds_left": self._controller.manual_override_seconds_left,
             "alerts": sorted(self._controller.alerts),
         }

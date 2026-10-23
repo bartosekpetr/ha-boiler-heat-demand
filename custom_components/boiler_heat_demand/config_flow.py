@@ -18,6 +18,7 @@ from .const import (
     CONF_ROOM_VALVES,
     CONF_HYSTERESIS,
     CONF_LEARNING,
+    CONF_MANUAL_TIMEOUT,
     CONF_MIN_OFF,
     CONF_MIN_ON,
     CONF_MIN_VALVES,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_DEMAND_MODE,
     DEFAULT_HYSTERESIS,
     DEFAULT_LEARNING,
+    DEFAULT_MANUAL_TIMEOUT,
     DEFAULT_MIN_OFF,
     DEFAULT_MIN_ON,
     DEFAULT_MIN_VALVES,
@@ -154,6 +156,10 @@ def _tuning_schema(d: dict[str, Any]) -> dict:
         vol.Required(CONF_VALVE_FAILSAFE, default=d.get(CONF_VALVE_FAILSAFE, DEFAULT_VALVE_FAILSAFE)): selector.SelectSelector(
             selector.SelectSelectorConfig(options=_FAILSAFES, mode="dropdown")
         ),
+        vol.Required(
+            CONF_MANUAL_TIMEOUT,
+            default=d.get(CONF_MANUAL_TIMEOUT, DEFAULT_MANUAL_TIMEOUT),
+        ): _timeout_minutes(),
         vol.Required(CONF_RELAY_TIMEOUT, default=d.get(CONF_RELAY_TIMEOUT, DEFAULT_RELAY_TIMEOUT)): selector.NumberSelector(
             selector.NumberSelectorConfig(min=1, max=120, step=1, mode="box", unit_of_measurement="min")
         ),
