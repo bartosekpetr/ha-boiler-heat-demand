@@ -10,6 +10,7 @@ Home Assistant custom integration (HACS) that switches a **gas boiler relay** ba
 2. **Room state** â€“ temperature is the room sensor if set, otherwise the median of its valves (one radiator-warmed valve can't skew it). The room target is the highest setpoint among its active valves. A room whose valves are all `off` never counts; if only some valves fail, the room keeps working from the others.
 3. **Is a room requesting heat?** â€“ any of its valves has `hvac_action == heating`; valves without an action use the room temperature vs target with hysteresis.
 4. **Demand mode** (configurable):
+   - *PID heating demand* - start when the highest active valve PID demand reaches the configured start percentage; keep heating until it falls to the stop percentage. The configured climate attribute must report a numeric value from 0 to 100. If no active valve provides a valid value, the integration falls back to valve-count demand.
    - *Valve count* â€“ start when at least *N* rooms call for heat.
    - *Temperature deficit* â€“ start when the largest room `target â’ current` reaches **start deficit**; keep heating until it falls to **stop deficit**. The gap between the two thresholds prevents on/off flapping.
 5. **Anti-short-cycling** â€“ minimum on and off times. Recommended: min on/off 5â€“10 min, start deficit â‰ 0.5 Â°C, stop deficit â‰ 0.1 Â°C.
@@ -27,7 +28,7 @@ A critical alert is raised (Repairs issue with critical severity, persistent not
 
 Alerts clear automatically when the relay behaves again.
 
-Entities: `binary_sensor` *Heat demand* (attributes `calling_rooms`, `max_temperature_deficit`, `safety_override`, `alerts`), `sensor` *Rooms calling for heat*, diagnostic `sensor` *Rooms learned* (per-room model as attributes), diagnostic `sensor` *Maximum room temperature deficit* (raw `target - current`, plus the learning-adjusted deficit and configured thresholds), and buttons for *Boiler on*, *Boiler off*, *Resume automatic control* and *Reset learning*.
+Entities: `binary_sensor` *Heat demand* (attributes `calling_rooms`, `max_temperature_deficit`, `safety_override`, `alerts`), `sensor` *Rooms calling for heat*, diagnostic `sensor` *Rooms learned* (per-room model as attributes), diagnostic `sensor` *Maximum room temperature deficit* (raw `target - current`, plus the learning-adjusted deficit and configured thresholds), `sensor` *Maximum PID demand* (highest valid PID value reported by an active valve), `sensor` *Cumulative PID demand* (sum across active valves; can exceed 100%), `sensor` *Cumulative temperature delta* (sum of positive target-minus-current deltas across active rooms), and buttons for *Boiler on*, *Boiler off*, *Resume automatic control* and *Reset learning*. All entities are grouped under one device called **Automated Boiler**.
 
 Manual boiler buttons hold the selected state until *Resume automatic control* is pressed. Manual control bypasses the minimum on/off timers; manual off also takes precedence over the low-temperature safety override. The selection is not persisted, so the integration returns to automatic control after a Home Assistant restart.
 
@@ -49,6 +50,8 @@ HACS â†’ Custom repositories â†’ add this repo (Integration) â†’ 
 | Option | Default |
 |---|---|
 | Demand mode | Valve count |
+| PID climate attribute | none (set this to the attribute exposed by your TRVs) |
+| PID start / stop demand (PID mode) | 20 / 5 % |
 | Rooms required to start | 1 |
 | Start / stop deficit (deficit mode) | 0.5 / 0.1 Â°C |
 | Minimum on time | 5 min |
@@ -64,14 +67,19 @@ HACS â†’ Custom repositories â†’ add this repo (Integration) â†’ 
 
 Stale valves are treated as unavailable. The timeout uses Home Assistant's last reported time, falling back to the last state-change time on older Home Assistant versions.
 
+For PID mode, configure the **climate attribute** that contains each TRV's PID heating demand (the attribute name is vendor-specific). Values must be numeric percentages from 0 to 100; missing or out-of-range values are ignored. The integration combines active valves by taking the highest value, so one room with a strong heat request can start the boiler. When no active valve provides a valid value, ordinary valve-count logic is used as a fallback. Minimum on/off times and low-temperature safety still apply.
+
+The cumulative sensors are live sums, not running totals over time. Cumulative PID demand sums every valid active-valve PID value (so it may exceed 100%). Cumulative temperature delta sums `max(0, target - current)` for each active room with readable temperatures; rooms at or above target contribute zero. The Maximum PID demand sensor reports the single highest active-valve value and remains separate from the cumulative sensor.
+
 ## Development
 
 ```
 py -3 -m pip install pytest
 py -3 -m pytest -q tests
+py -3 -m compileall -q custom_components tests
 ```
 
-Decision logic lives in `demand.py` (no Home Assistant imports) and is unit-tested. Config flow, controller and entities need testing in a real HA.
+Decision logic lives in `demand.py` (no Home Assistant imports) and is unit-tested. HA-level tests cover controller PID parsing and relay behavior, aggregate sensors, and entity device grouping; they run on Linux in CI because Home Assistant's test harness is not supported on Windows. GitHub Actions also runs hassfest and HACS validation.
 
 ## Ideas / roadmap
 

@@ -17,7 +17,7 @@ demand_met, valve_deficit, valve_is_too_cold = demand.demand_met, demand.valve_d
 
 def v(**kw):
     base = dict(entity_id="climate.a", available=True, hvac_mode="heat",
-                hvac_action=None, current_temp=None, target_temp=None)
+                hvac_action=None, current_temp=None, target_temp=None, pid_demand=None)
     base.update(kw)
     return ValveState(**base)
 
@@ -78,6 +78,23 @@ def test_deficit_mode_failsafe_forces_demand():
     assert demand_met("temperature_deficit", 1, None, 1, 0.5, 0.1, False, failsafe_calling=True)
 
 
+def test_pid_mode_start_stop_hysteresis():
+    args = dict(mode="pid_demand", calling_count=0, max_deficit=None, min_valves=1,
+                start_deficit=0.5, stop_deficit=0.1, pid_start=20, pid_stop=5)
+    assert not demand_met(**args, boiler_is_on=False, max_pid_demand=19.9)
+    assert demand_met(**args, boiler_is_on=False, max_pid_demand=20)
+    assert demand_met(**args, boiler_is_on=True, max_pid_demand=5.1)
+    assert not demand_met(**args, boiler_is_on=True, max_pid_demand=5)
+
+
+def test_pid_mode_falls_back_to_valve_calls_without_readings():
+    args = dict(mode="pid_demand", max_deficit=None, min_valves=1,
+                start_deficit=0.5, stop_deficit=0.1, max_pid_demand=None)
+    assert demand_met(**args, calling_count=1, boiler_is_on=False)
+    assert not demand_met(**args, calling_count=0, boiler_is_on=False)
+    assert demand_met(**args, calling_count=0, boiler_is_on=False, failsafe_calling=True)
+
+
 def test_valve_deficit_ignores_off_and_unavailable():
     assert valve_deficit(v(current_temp=19.0, target_temp=21.0)) == 2.0
     assert valve_deficit(v(hvac_mode="off", current_temp=19.0, target_temp=21.0)) is None
@@ -125,6 +142,16 @@ def test_room_uses_external_sensor_and_highest_target():
 def test_room_median_ignores_outlier():
     valves = [v(entity_id=str(i), current_temp=t, target_temp=21.0) for i, t in enumerate([20.0, 20.2, 25.0])]
     assert demand.aggregate_room(valves, 0.3, False).temp == 20.2
+
+
+def test_room_uses_highest_available_pid_demand():
+    room = demand.aggregate_room(
+        [v(entity_id="a", pid_demand=12.5), v(entity_id="b", pid_demand=45.0),
+         v(entity_id="c", pid_demand=None)],
+        0.3,
+        False,
+    )
+    assert room.pid_demand == 45.0
 
 
 def test_room_partial_and_total_failure():

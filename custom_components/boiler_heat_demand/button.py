@@ -6,6 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 
+from . import device_info
 from .const import DOMAIN
 
 
@@ -29,6 +30,7 @@ class ResetLearningButton(ButtonEntity):
     def __init__(self, controller, entry: ConfigEntry) -> None:
         self._controller = controller
         self._attr_unique_id = f"{entry.entry_id}_reset_learning"
+        self._attr_device_info = device_info(entry)
 
     async def async_press(self) -> None:
         await self._controller.async_reset_learning()
@@ -41,6 +43,7 @@ class BoilerOnButton(ButtonEntity):
     def __init__(self, controller, entry: ConfigEntry) -> None:
         self._controller = controller
         self._attr_unique_id = f"{entry.entry_id}_boiler_on"
+        self._attr_device_info = device_info(entry)
 
     async def async_press(self) -> None:
         await self._controller.async_set_manual_override(True)
@@ -53,6 +56,7 @@ class BoilerOffButton(ButtonEntity):
     def __init__(self, controller, entry: ConfigEntry) -> None:
         self._controller = controller
         self._attr_unique_id = f"{entry.entry_id}_boiler_off"
+        self._attr_device_info = device_info(entry)
 
     async def async_press(self) -> None:
         await self._controller.async_set_manual_override(False)
@@ -65,6 +69,7 @@ class ResumeAutomaticButton(ButtonEntity):
     def __init__(self, controller, entry: ConfigEntry) -> None:
         self._controller = controller
         self._attr_unique_id = f"{entry.entry_id}_resume_automatic"
+        self._attr_device_info = device_info(entry)
 
     async def async_press(self) -> None:
         await self._controller.async_resume_automatic()

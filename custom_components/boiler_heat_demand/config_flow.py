@@ -23,6 +23,9 @@ from .const import (
     CONF_MIN_VALVES,
     CONF_NOTIFY,
     CONF_OUTDOOR,
+    CONF_PID_ATTRIBUTE,
+    CONF_PID_START,
+    CONF_PID_STOP,
     CONF_RELAY,
     CONF_RELAY_TIMEOUT,
     CONF_ROOMS,
@@ -42,11 +45,20 @@ from .const import (
     DEFAULT_SAFETY_MIN_TEMP,
     DEFAULT_START_DEFICIT,
     DEFAULT_STOP_DEFICIT,
+    DEFAULT_PID_START,
+    DEFAULT_PID_STOP,
     DEFAULT_VALVE_FAILSAFE,
     DEFAULT_VALVE_TIMEOUT,
     DOMAIN,
 )
-from .demand import FAILSAFE_HEAT, FAILSAFE_HOLD, FAILSAFE_IGNORE, MODE_COUNT, MODE_DEFICIT
+from .demand import (
+    FAILSAFE_HEAT,
+    FAILSAFE_HOLD,
+    FAILSAFE_IGNORE,
+    MODE_COUNT,
+    MODE_DEFICIT,
+    MODE_PID,
+)
 
 
 def _minutes(default: int) -> selector.NumberSelector:
@@ -74,6 +86,7 @@ def _degrees(max_value: float) -> selector.NumberSelector:
 _DEMAND_MODES = [
     selector.SelectOptionDict(value=MODE_COUNT, label="Number of valves calling for heat"),
     selector.SelectOptionDict(value=MODE_DEFICIT, label="Temperature deficit (target - current)"),
+    selector.SelectOptionDict(value=MODE_PID, label="PID heating demand"),
 ]
 _FAILSAFES = [
     selector.SelectOptionDict(value=FAILSAFE_IGNORE, label="Ignore the valve (no demand)"),
@@ -92,6 +105,13 @@ def _tuning_schema(d: dict[str, Any]) -> dict:
         ),
         vol.Required(CONF_START_DEFICIT, default=d.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT)): _degrees(10),
         vol.Required(CONF_STOP_DEFICIT, default=d.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT)): _degrees(10),
+        vol.Optional(CONF_PID_ATTRIBUTE, description={"suggested_value": d.get(CONF_PID_ATTRIBUTE, "")}): selector.TextSelector(),
+        vol.Required(CONF_PID_START, default=d.get(CONF_PID_START, DEFAULT_PID_START)): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=100, step=1, mode="box", unit_of_measurement="%")
+        ),
+        vol.Required(CONF_PID_STOP, default=d.get(CONF_PID_STOP, DEFAULT_PID_STOP)): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=100, step=1, mode="box", unit_of_measurement="%")
+        ),
         vol.Required(CONF_MIN_ON, default=d.get(CONF_MIN_ON, DEFAULT_MIN_ON)): _minutes(DEFAULT_MIN_ON),
         vol.Required(CONF_MIN_OFF, default=d.get(CONF_MIN_OFF, DEFAULT_MIN_OFF)): _minutes(DEFAULT_MIN_OFF),
         vol.Required(CONF_HYSTERESIS, default=d.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)): selector.NumberSelector(
@@ -174,12 +194,23 @@ class BoilerConfigFlow(_RoomsMixin, config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
+            if float(user_input[CONF_PID_START]) < float(user_input[CONF_PID_STOP]):
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=vol.Schema(self._user_schema()),
+                    errors={"base": "invalid_pid_thresholds"},
+                )
             await self.async_set_unique_id(user_input[CONF_RELAY])
             self._abort_if_unique_id_configured()
+            user_input[CONF_PID_ATTRIBUTE] = (user_input.get(CONF_PID_ATTRIBUTE) or "").strip()
             self._data = dict(user_input)
             self._rooms = []
             return await self.async_step_rooms()
-        schema = {
+        return self.async_show_form(step_id="user", data_schema=vol.Schema(self._user_schema()))
+
+    @staticmethod
+    def _user_schema() -> dict:
+        return {
             vol.Required(CONF_RELAY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["switch", "input_boolean"])
             ),
@@ -188,7 +219,6 @@ class BoilerConfigFlow(_RoomsMixin, config_entries.ConfigFlow, domain=DOMAIN):
             ),
             **_tuning_schema({}),
         }
-        return self.async_show_form(step_id="user", data_schema=vol.Schema(schema))
 
     async def _finish(self):
         return self.async_create_entry(title="Boiler", data={**self._data, CONF_ROOMS: self._rooms})
@@ -203,6 +233,13 @@ class BoilerOptionsFlow(_RoomsMixin, config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         cur = {**self.config_entry.data, **self.config_entry.options}
         if user_input is not None:
+            if float(user_input[CONF_PID_START]) < float(user_input[CONF_PID_STOP]):
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=vol.Schema(self._options_schema(cur)),
+                    errors={"base": "invalid_pid_thresholds"},
+                )
+            user_input[CONF_PID_ATTRIBUTE] = (user_input.get(CONF_PID_ATTRIBUTE) or "").strip()
             redefine = user_input.pop(CONF_EDIT_ROOMS, False)
             self._data = dict(user_input)
             if redefine:
@@ -210,7 +247,11 @@ class BoilerOptionsFlow(_RoomsMixin, config_entries.OptionsFlow):
                 return await self.async_step_rooms()
             self._rooms = cur.get(CONF_ROOMS, [])
             return await self._finish()
-        schema = {
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(self._options_schema(cur)))
+
+    @staticmethod
+    def _options_schema(cur: dict[str, Any]) -> dict:
+        return {
             vol.Required(CONF_RELAY, default=cur[CONF_RELAY]): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["switch", "input_boolean"])
             ),
@@ -220,7 +261,6 @@ class BoilerOptionsFlow(_RoomsMixin, config_entries.OptionsFlow):
             vol.Required(CONF_EDIT_ROOMS, default=False): selector.BooleanSelector(),
             **_tuning_schema(cur),
         }
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
 
     async def _finish(self):
         return self.async_create_entry(data={**self._data, CONF_ROOMS: self._rooms})

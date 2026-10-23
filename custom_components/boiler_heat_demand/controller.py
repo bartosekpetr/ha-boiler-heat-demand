@@ -24,6 +24,9 @@ from .const import (
     CONF_MIN_VALVES,
     CONF_NOTIFY,
     CONF_OUTDOOR,
+    CONF_PID_ATTRIBUTE,
+    CONF_PID_START,
+    CONF_PID_STOP,
     CONF_RELAY,
     CONF_RELAY_TIMEOUT,
     CONF_ROOMS,
@@ -43,6 +46,8 @@ from .const import (
     DEFAULT_SAFETY_MIN_TEMP,
     DEFAULT_START_DEFICIT,
     DEFAULT_STOP_DEFICIT,
+    DEFAULT_PID_START,
+    DEFAULT_PID_STOP,
     DEFAULT_VALVE_FAILSAFE,
     DEFAULT_VALVE_TIMEOUT,
     DOMAIN,
@@ -94,6 +99,9 @@ class BoilerController:
         self.start_deficit = DEFAULT_START_DEFICIT
         self.stop_deficit = DEFAULT_STOP_DEFICIT
         self.manual_override: bool | None = None
+        self.max_pid_demand: float | None = None
+        self.cumulative_temp_delta: float | None = None
+        self.cumulative_pid_demand: float | None = None
         self.safety_override = False
         self.learners: dict[str, RoomLearner] = {}
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.learning")
@@ -174,7 +182,9 @@ class BoilerController:
     async def _on_timer(self, _now) -> None:
         await self.async_evaluate()
 
-    def _snapshot(self, entity_id: str, now, timeout_seconds: float) -> ValveState:
+    def _snapshot(
+        self, entity_id: str, now, timeout_seconds: float, pid_attribute: str | None
+    ) -> ValveState:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return ValveState(entity_id, False, None, None, None, None)
@@ -182,6 +192,12 @@ class BoilerController:
         if valve_report_is_stale(last_reported, now, timeout_seconds):
             return ValveState(entity_id, False, None, None, None, None)
         attrs = state.attributes
+        raw_pid_demand = attrs.get(pid_attribute) if pid_attribute else None
+        pid_demand = (
+            None if isinstance(raw_pid_demand, bool) else _float(raw_pid_demand)
+        )
+        if pid_demand is not None and not 0 <= pid_demand <= 100:
+            pid_demand = None
         return ValveState(
             entity_id,
             True,
@@ -189,6 +205,7 @@ class BoilerController:
             attrs.get("hvac_action"),
             _float(attrs.get("current_temperature")),
             _float(attrs.get("temperature")),
+            pid_demand,
         )
 
     async def async_evaluate(self) -> None:
@@ -218,14 +235,22 @@ class BoilerController:
         calling: list[str] = []
         failsafe_calling = False
         deficits: list[float] = []
+        positive_deficits: list[float] = []
         effective: list[float] = []
+        pid_demands: list[float] = []
         too_cold = False
         learning_on = bool(cfg.get(CONF_LEARNING, DEFAULT_LEARNING))
         outdoor = self._outdoor_temp(cfg)
+        pid_attribute = (cfg.get(CONF_PID_ATTRIBUTE) or "").strip() or None
+        pid_start = float(cfg.get(CONF_PID_START, DEFAULT_PID_START))
+        pid_stop = float(cfg.get(CONF_PID_STOP, DEFAULT_PID_STOP))
         mono = time.monotonic()
         for room_cfg in self._rooms(cfg):
             name = room_cfg.name
-            snaps = [self._snapshot(e, now, timeout_seconds) for e in room_cfg.valves]
+            snaps = [
+                self._snapshot(e, now, timeout_seconds, pid_attribute)
+                for e in room_cfg.valves
+            ]
             room = aggregate_room(
                 snaps,
                 hysteresis,
@@ -242,6 +267,13 @@ class BoilerController:
                 continue
             if not room.active:
                 continue
+            pid_demands.extend(
+                valve.pid_demand
+                for valve in snaps
+                if valve.available
+                and valve.hvac_mode not in (None, "off")
+                and valve.pid_demand is not None
+            )
             was_calling = name in previously_calling
             wants_heat = room.calling
             deficit = None
@@ -278,11 +310,15 @@ class BoilerController:
                 calling.append(name)
             if deficit is not None:
                 deficits.append(deficit)
+                positive_deficits.append(max(0.0, deficit))
                 effective.append(contribution)
             if safety_temp > 0 and room.temp is not None and room.temp <= safety_temp:
                 too_cold = True
         self._calling = set(calling)
         self.max_deficit = max(deficits) if deficits else None
+        self.max_pid_demand = max(pid_demands) if pid_demands else None
+        self.cumulative_temp_delta = sum(positive_deficits) if positive_deficits else None
+        self.cumulative_pid_demand = sum(pid_demands) if pid_demands else None
         self.safety_override = too_cold
         effective_deficit = max(effective) if effective else None
         self.effective_deficit = effective_deficit
@@ -296,6 +332,9 @@ class BoilerController:
             stop_deficit,
             boiler_is_on,
             failsafe_calling,
+            self.max_pid_demand,
+            pid_start,
+            pid_stop,
         )
 
         if not relay_ok:

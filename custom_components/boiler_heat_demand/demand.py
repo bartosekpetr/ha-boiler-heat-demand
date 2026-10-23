@@ -28,6 +28,7 @@ class ValveState:
     hvac_action: str | None
     current_temp: float | None
     target_temp: float | None
+    pid_demand: float | None = None
 
 
 def valve_calls_for_heat(valve: ValveState, hysteresis: float, currently_calling: bool) -> bool:
@@ -50,6 +51,7 @@ def valve_calls_for_heat(valve: ValveState, hysteresis: float, currently_calling
 
 MODE_COUNT = "valve_count"
 MODE_DEFICIT = "temperature_deficit"
+MODE_PID = "pid_demand"
 
 FAILSAFE_IGNORE = "ignore"
 FAILSAFE_HEAT = "call_for_heat"
@@ -81,11 +83,15 @@ def demand_met(
     stop_deficit: float,
     boiler_is_on: bool,
     failsafe_calling: bool = False,
+    max_pid_demand: float | None = None,
+    pid_start: float = 20.0,
+    pid_stop: float = 5.0,
 ) -> bool:
-    """Evaluate demand by valve count or by the largest temperature deficit.
+    """Evaluate demand by valve count, largest deficit, or highest PID demand.
 
     Deficit mode uses separate start/stop thresholds (start >= stop) so the
-    boiler does not toggle around a single value.
+    boiler does not toggle around a single value. PID mode uses the same
+    hysteresis and falls back to valve count when no valid PID value is reported.
     """
     if mode == MODE_DEFICIT:
         if failsafe_calling:
@@ -95,6 +101,14 @@ def demand_met(
         if boiler_is_on:
             return max_deficit > stop_deficit
         return max_deficit >= start_deficit
+    if mode == MODE_PID:
+        if failsafe_calling:
+            return True
+        if max_pid_demand is None:
+            return calling_count >= min_valves
+        if boiler_is_on:
+            return max_pid_demand > pid_stop
+        return max_pid_demand >= pid_start
     return calling_count >= min_valves
 
 
@@ -147,6 +161,7 @@ class RoomState:
     calling: bool
     temp: float | None
     target: float | None
+    pid_demand: float | None = None
 
 
 def _median(values: list[float]) -> float:
@@ -181,6 +196,8 @@ def aggregate_room(
     temp = sensor_temp if sensor_temp is not None else (_median(temps) if temps else None)
     targets = [v.target_temp for v in active if v.target_temp is not None]
     target = max(targets) if targets else None
+    pid_values = [v.pid_demand for v in active if v.pid_demand is not None]
+    pid_demand = max(pid_values) if pid_values else None
 
     calling = False
     for v in active:
@@ -189,7 +206,7 @@ def aggregate_room(
         if valve_calls_for_heat(v, hysteresis, currently_calling):
             calling = True
             break
-    return RoomState(True, True, calling, temp, target)
+    return RoomState(True, True, calling, temp, target, pid_demand)
 
 
 @dataclass(frozen=True)

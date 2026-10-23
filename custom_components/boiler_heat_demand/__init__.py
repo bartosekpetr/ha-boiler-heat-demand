@@ -3,9 +3,20 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN, PLATFORMS
 from .controller import BoilerController
+
+
+def device_info(entry: ConfigEntry) -> DeviceInfo:
+    """All entities of one config entry belong to a single 'Automated Boiler' device."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id)},
+        name="Automated Boiler",
+        manufacturer="bartosekpetr",
+        model="Boiler Heat Demand",
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

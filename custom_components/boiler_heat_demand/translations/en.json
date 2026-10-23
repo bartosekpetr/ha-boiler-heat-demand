@@ -12,6 +12,9 @@
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
           "stop_deficit": "Stop when largest deficit falls to (deficit mode)",
+          "pid_demand_attribute": "Climate attribute containing PID demand (0–100%)",
+          "pid_start_percent": "Start when PID demand reaches",
+          "pid_stop_percent": "Stop when PID demand falls to",
           "min_on_minutes": "Minimum on time",
           "min_off_minutes": "Minimum off time",
           "hysteresis": "Hysteresis (used only if a valve has no heating action)",
@@ -33,11 +36,14 @@
           "temp_sensor": "Room temperature sensor (optional, more accurate than the valves)",
           "add_another": "Add another room"
         }
-      }    },
+      }
+    },
     "error": {
       "room_incomplete": "Enter both a room name and at least one valve.",
-      "room_duplicate": "That room name or one of its valves is already used."
-    },    "abort": { "already_configured": "This relay is already configured." }
+      "room_duplicate": "That room name or one of its valves is already used.",
+      "invalid_pid_thresholds": "PID start demand must be greater than or equal to PID stop demand."
+    },
+    "abort": { "already_configured": "This relay is already configured." }
   },
   "options": {
     "step": {
@@ -51,6 +57,9 @@
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
           "stop_deficit": "Stop when largest deficit falls to (deficit mode)",
+          "pid_demand_attribute": "Climate attribute containing PID demand (0–100%)",
+          "pid_start_percent": "Start when PID demand reaches",
+          "pid_stop_percent": "Stop when PID demand falls to",
           "min_on_minutes": "Minimum on time",
           "min_off_minutes": "Minimum off time",
           "hysteresis": "Hysteresis (used only if a valve has no heating action)",
@@ -72,10 +81,10 @@
           "temp_sensor": "Room temperature sensor (optional, more accurate than the valves)",
           "add_another": "Add another room"
         }
-      }    },
+      }
+    },
     "error": {
-      "room_incomplete": "Enter both a room name and at least one valve.",
-      "room_duplicate": "That room name or one of its valves is already used."
+      "invalid_pid_thresholds": "PID start demand must be greater than or equal to PID stop demand."
     }
   },
   "issues": {
