@@ -1,4 +1,4 @@
-﻿"""Evaluates valve demand and drives the boiler relay."""
+"""Evaluates valve demand and drives the boiler relay."""
 from __future__ import annotations
 
 import logging
