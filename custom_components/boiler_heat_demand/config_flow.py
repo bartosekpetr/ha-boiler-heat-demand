@@ -16,6 +16,7 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR,
     CONF_ROOM_VALVES,
+    CONF_USE_DETECTED,
     CONF_HYSTERESIS,
     CONF_LEARNING,
     CONF_MANUAL_TIMEOUT,
@@ -61,7 +62,7 @@ from .demand import (
     MODE_DEFICIT,
     MODE_PID,
 )
-from .devices import climate_entities_for_devices, split_valves_by_device
+from .devices import climate_entities_for_devices, detect_rooms, split_valves_by_device
 
 
 def _valve_fields(hass, current_valves: list[str]) -> dict:
@@ -172,10 +173,65 @@ def _tuning_schema(d: dict[str, Any]) -> dict:
 
 
 class _RoomsMixin:
-    """Collects room groupings: repeat the room step until the user is done."""
+    """Rooms come from the Home Assistant areas of the valves; the user only confirms them.
+
+    Valves without an area are the only ones the user has to assign by hand.
+    """
 
     _data: dict[str, Any]
     _rooms: list[dict[str, Any]]
+    _detected: list[dict[str, Any]]
+    _unassigned: list[str]
+    _manual_valves: list[str]
+
+    def _valve_label(self, entity_id: str) -> str:
+        state = self.hass.states.get(entity_id)
+        return (state.attributes.get("friendly_name") if state else None) or entity_id
+
+    async def _start_rooms(self):
+        self._rooms = []
+        valves = list(self._data[CONF_VALVES])
+        self._detected, self._unassigned = detect_rooms(self.hass, valves)
+        self._manual_valves = valves
+        if self._detected:
+            return await self.async_step_confirm_rooms()
+        return await self._next_room_step()
+
+    async def async_step_confirm_rooms(self, user_input: dict[str, Any] | None = None):
+        if user_input is not None:
+            if user_input.get(CONF_USE_DETECTED, True):
+                self._rooms = [dict(room) for room in self._detected]
+                self._manual_valves = list(self._unassigned)
+            else:
+                self._rooms = []
+                self._manual_valves = list(self._data[CONF_VALVES])
+            return await self._next_room_step()
+        rooms = "\n".join(
+            f"- **{room['name']}**: " + ", ".join(self._valve_label(v) for v in room["valves"])
+            for room in self._detected
+        )
+        unassigned = ""
+        if self._unassigned:
+            unassigned = (
+                "\n\nNo area assigned (you will be asked where they belong): "
+                + ", ".join(self._valve_label(v) for v in self._unassigned)
+            )
+        return self.async_show_form(
+            step_id="confirm_rooms",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_USE_DETECTED, default=True): selector.BooleanSelector()}
+            ),
+            description_placeholders={"rooms": rooms, "unassigned": unassigned},
+        )
+
+    def _remaining_valves(self) -> list[str]:
+        taken = {e for room in self._rooms for e in room[CONF_ROOM_VALVES]}
+        return [v for v in self._manual_valves if v not in taken]
+
+    async def _next_room_step(self):
+        if not self._remaining_valves():
+            return await self._finish()
+        return await self.async_step_rooms()
 
     def _room_schema(self) -> vol.Schema:
         return vol.Schema(
@@ -183,7 +239,7 @@ class _RoomsMixin:
                 vol.Optional(CONF_ROOM_NAME): selector.TextSelector(),
                 vol.Optional(CONF_ROOM_VALVES): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="climate", multiple=True, include_entities=list(self._data[CONF_VALVES])
+                        domain="climate", multiple=True, include_entities=self._remaining_valves()
                     )
                 ),
                 vol.Optional(CONF_ROOM_SENSOR): selector.EntitySelector(
@@ -191,6 +247,20 @@ class _RoomsMixin:
                 ),
                 vol.Required(CONF_ADD_ANOTHER, default=False): selector.BooleanSelector(),
             }
+        )
+
+    def _rooms_form(self, errors: dict[str, str] | None = None):
+        remaining = ", ".join(self._valve_label(v) for v in self._remaining_valves())
+        hint = (
+            f"These valves have no area in Home Assistant: {remaining}. "
+            "Give them a room name, or leave it empty to keep each as its own room. "
+            "Assigning an area to the device in Home Assistant lets it be detected automatically."
+        )
+        return self.async_show_form(
+            step_id="rooms",
+            data_schema=self._room_schema(),
+            errors=errors or {},
+            description_placeholders={"hint": hint},
         )
 
     async def async_step_rooms(self, user_input: dict[str, Any] | None = None):
@@ -212,13 +282,11 @@ class _RoomsMixin:
                             "temp_sensor": user_input.get(CONF_ROOM_SENSOR) or None,
                         }
                     )
-            if not errors and not user_input.get(CONF_ADD_ANOTHER):
+            if not errors and (not user_input.get(CONF_ADD_ANOTHER) or not self._remaining_valves()):
                 return await self._finish()
             if not errors:
-                return self.async_show_form(step_id="rooms", data_schema=self._room_schema())
-        return self.async_show_form(
-            step_id="rooms", data_schema=self._room_schema(), errors=errors
-        )
+                return self._rooms_form()
+        return self._rooms_form(errors)
 
     async def _finish(self):
         raise NotImplementedError
@@ -243,8 +311,7 @@ class BoilerConfigFlow(_RoomsMixin, config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(user_input[CONF_RELAY])
             self._abort_if_unique_id_configured()
             self._data = dict(user_input)
-            self._rooms = []
-            return await self.async_step_rooms()
+            return await self._start_rooms()
         return self.async_show_form(step_id="user", data_schema=vol.Schema(self._user_schema()))
 
     def _user_schema(self) -> dict:
@@ -283,8 +350,7 @@ class BoilerOptionsFlow(_RoomsMixin, config_entries.OptionsFlow):
             redefine = user_input.pop(CONF_EDIT_ROOMS, False)
             self._data = dict(user_input)
             if redefine:
-                self._rooms = []
-                return await self.async_step_rooms()
+                return await self._start_rooms()
             self._rooms = cur.get(CONF_ROOMS, [])
             return await self._finish()
         return self.async_show_form(step_id="init", data_schema=vol.Schema(self._options_schema(cur)))

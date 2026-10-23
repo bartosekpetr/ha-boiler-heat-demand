@@ -374,6 +374,30 @@ class RoomConfig:
     sensor: str | None = None
 
 
+def group_valves_by_area(
+    valves: list[str], areas: Mapping[str, tuple[str, str] | None]
+) -> tuple[list[dict], list[str]]:
+    """Group valves into rooms by their Home Assistant area.
+
+    ``areas`` maps a valve entity id to ``(area_id, area_name)`` or None when the valve (and
+    its device) has no area. Returns ``(rooms, unassigned)``: one room dict per area, named
+    after the area, in the order the areas first appear, plus the valves without an area.
+    """
+    by_area: dict[str, dict] = {}
+    unassigned: list[str] = []
+    for entity_id in valves:
+        area = areas.get(entity_id)
+        area_name = area[1].strip() if area and area[1] else ""
+        if not area_name:
+            unassigned.append(entity_id)
+            continue
+        room = by_area.setdefault(
+            area[0], {"name": area_name, "valves": [], "temp_sensor": None}
+        )
+        room["valves"].append(entity_id)
+    return list(by_area.values()), unassigned
+
+
 def build_rooms(valves: list[str], rooms: list[dict] | None) -> list[RoomConfig]:
     """Configured rooms first; each valve not assigned to a room becomes its own room.
 

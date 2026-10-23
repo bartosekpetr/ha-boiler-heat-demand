@@ -247,6 +247,26 @@ def test_build_rooms_groups_and_defaults():
     assert demand.build_rooms(["climate.a"], None)[0].valves == ("climate.a",)
 
 
+def test_group_valves_by_area_builds_rooms_and_lists_valves_without_an_area():
+    areas = {
+        "climate.a": ("bedroom", "Ložnice"),
+        "climate.b": ("hall", "Chodba"),
+        "climate.c": ("bedroom", "Ložnice"),
+        "climate.d": None,
+        "climate.e": ("kitchen", "  "),  # a blank area name is not usable as a room name
+    }
+    rooms, unassigned = demand.group_valves_by_area(list(areas) + ["climate.unknown"], areas)
+    assert rooms == [
+        {"name": "Ložnice", "valves": ["climate.a", "climate.c"], "temp_sensor": None},
+        {"name": "Chodba", "valves": ["climate.b"], "temp_sensor": None},
+    ]
+    assert unassigned == ["climate.d", "climate.e", "climate.unknown"]
+    assert demand.group_valves_by_area([], {}) == ([], [])
+    # the result is accepted by build_rooms unchanged
+    built = demand.build_rooms(list(areas), rooms)
+    assert [r.name for r in built][:2] == ["Ložnice", "Chodba"]
+
+
 NAN, INF, NINF = float("nan"), float("inf"), float("-inf")
 
 

@@ -2,9 +2,29 @@
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .demand import find_pid_entity
+from .demand import find_pid_entity, group_valves_by_area
+
+
+def valve_area(hass: HomeAssistant, entity_id: str) -> tuple[str, str] | None:
+    """(area_id, area name) of a valve: its own area, else the area of its device."""
+    entry = er.async_get(hass).async_get(entity_id)
+    if entry is None:
+        return None
+    area_id = entry.area_id
+    if not area_id and entry.device_id:
+        device = dr.async_get(hass).async_get(entry.device_id)
+        area_id = device.area_id if device else None
+    area = ar.async_get(hass).async_get_area(area_id) if area_id else None
+    return (area.id, area.name) if area else None
+
+
+def detect_rooms(hass: HomeAssistant, valves: list[str]) -> tuple[list[dict], list[str]]:
+    """Group valves by Home Assistant area; returns (rooms, valves that have no area)."""
+    return group_valves_by_area(valves, {v: valve_area(hass, v) for v in valves})
 
 
 def climate_entities_for_devices(hass: HomeAssistant, device_ids: list[str]) -> tuple[list[str], list[str]]:

@@ -474,6 +474,141 @@ async def test_removing_the_integration_turns_a_running_relay_off(hass):
     assert [c.data["entity_id"] for c in calls] == ["switch.boiler"]
 
 
+def _area_valve(hass, name, area_id=None, entity_area_id=None):
+    """A climate entity on its own device, optionally with a device area and/or an entity area."""
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+
+    entry = MockConfigEntry(domain="zha")
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("zha", name)}, name=name
+    )
+    if area_id:
+        dr.async_get(hass).async_update_device(device.id, area_id=area_id)
+    registry = er.async_get(hass)
+    climate = registry.async_get_or_create(
+        "climate", "zha", f"{name}-climate", suggested_object_id=name.lower().replace(" ", "_"),
+        device_id=device.id, config_entry=entry, has_entity_name=True, original_name="Thermostat",
+    )
+    if entity_area_id:
+        registry.async_update_entity(climate.entity_id, area_id=entity_area_id)
+    hass.states.async_set(climate.entity_id, "heat", {"friendly_name": name})
+    return climate.entity_id
+
+
+def _room_flow(hass, valves):
+    from custom_components.boiler_heat_demand.config_flow import BoilerConfigFlow
+
+    flow = BoilerConfigFlow()
+    flow.hass, flow.handler, flow.flow_id, flow.context = hass, DOMAIN, "test", {"source": "user"}
+    flow._data = {"relay_entity": "switch.boiler", "valve_entities": valves}
+    return flow
+
+
+def _offered_valves(form):
+    """Entities the room form's valve selector offers."""
+    schema = form["data_schema"].schema
+    key = next(k for k in schema if str(k) == "valves")
+    return schema[key].config["include_entities"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_valve_area_and_room_detection(hass):
+    from homeassistant.helpers import area_registry as ar
+
+    from custom_components.boiler_heat_demand.devices import detect_rooms, valve_area
+
+    bedroom = ar.async_get(hass).async_create("Ložnice")
+    hall = ar.async_get(hass).async_create("Chodba")
+    heating = _area_valve(hass, "Ložnice topeni", area_id=bedroom.id)
+    window = _area_valve(hass, "Ložnice okno", area_id=bedroom.id)
+    entrance = _area_valve(hass, "Chodba vstup", area_id=bedroom.id, entity_area_id=hall.id)
+    cellar = _area_valve(hass, "Sklep")
+
+    assert valve_area(hass, heating) == (bedroom.id, "Ložnice")
+    assert valve_area(hass, entrance) == (hall.id, "Chodba")  # an entity's own area wins
+    assert valve_area(hass, cellar) is None
+    assert valve_area(hass, "climate.not_in_the_registry") is None
+    rooms, unassigned = detect_rooms(hass, [heating, window, entrance, cellar])
+    assert [(r["name"], r["valves"]) for r in rooms] == [
+        ("Ložnice", [heating, window]),
+        ("Chodba", [entrance]),
+    ]
+    assert unassigned == [cellar]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_flow_confirms_detected_rooms_and_only_asks_for_valves_without_an_area(hass):
+    from homeassistant.helpers import area_registry as ar
+
+    bedroom = ar.async_get(hass).async_create("Ložnice")
+    heating = _area_valve(hass, "Ložnice topeni", area_id=bedroom.id)
+    window = _area_valve(hass, "Ložnice okno", area_id=bedroom.id)
+    cellar = _area_valve(hass, "Sklep")
+    flow = _room_flow(hass, [heating, window, cellar])
+
+    form = await flow._start_rooms()
+    assert form["step_id"] == "confirm_rooms"
+    assert "**Ložnice**: Ložnice topeni, Ložnice okno" in form["description_placeholders"]["rooms"]
+    assert "Sklep" in form["description_placeholders"]["unassigned"]
+
+    form = await flow.async_step_confirm_rooms({"use_detected_rooms": True})
+    assert form["step_id"] == "rooms"
+    assert _offered_valves(form) == [cellar]
+    assert "Sklep" in form["description_placeholders"]["hint"]
+
+    result = await flow.async_step_rooms({"name": "Sklep", "valves": [cellar], "add_another": False})
+    assert result["type"].value == "create_entry"
+    assert [(r["name"], r["valves"]) for r in result["data"]["rooms"]] == [
+        ("Ložnice", [heating, window]),
+        ("Sklep", [cellar]),
+    ]
+
+    # a hand-made room may not reuse a detected room's name
+    flow = _room_flow(hass, [heating, cellar])
+    await flow._start_rooms()
+    await flow.async_step_confirm_rooms({"use_detected_rooms": True})
+    form = await flow.async_step_rooms({"name": "Ložnice", "valves": [cellar], "add_another": False})
+    assert form["errors"] == {"base": "room_duplicate"}
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_flow_finishes_after_confirmation_when_every_valve_has_an_area(hass):
+    from homeassistant.helpers import area_registry as ar
+
+    bedroom = ar.async_get(hass).async_create("Ložnice")
+    hall = ar.async_get(hass).async_create("Chodba")
+    heating = _area_valve(hass, "Ložnice topeni", area_id=bedroom.id)
+    entrance = _area_valve(hass, "Chodba vstup", area_id=hall.id)
+    flow = _room_flow(hass, [heating, entrance])
+
+    await flow._start_rooms()
+    result = await flow.async_step_confirm_rooms({"use_detected_rooms": True})
+
+    assert result["type"].value == "create_entry"
+    assert [r["name"] for r in result["data"]["rooms"]] == ["Ložnice", "Chodba"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_flow_declining_detection_or_having_no_areas_offers_manual_grouping(hass):
+    from homeassistant.helpers import area_registry as ar
+
+    bedroom = ar.async_get(hass).async_create("Ložnice")
+    heating = _area_valve(hass, "Ložnice topeni", area_id=bedroom.id)
+    cellar = _area_valve(hass, "Sklep")
+
+    flow = _room_flow(hass, [heating, cellar])
+    await flow._start_rooms()
+    form = await flow.async_step_confirm_rooms({"use_detected_rooms": False})
+    assert form["step_id"] == "rooms" and _offered_valves(form) == [heating, cellar]
+
+    flow = _room_flow(hass, [cellar])
+    form = await flow._start_rooms()
+    assert form["step_id"] == "rooms"  # nothing detected: straight to manual grouping
+    result = await flow.async_step_rooms({"add_another": False})
+    assert result["type"].value == "create_entry" and result["data"]["rooms"] == []
+
+
 def test_entities_share_the_automated_boiler_device():
     entry = MockConfigEntry(domain=DOMAIN, entry_id="test-entry")
     controller = SimpleNamespace(

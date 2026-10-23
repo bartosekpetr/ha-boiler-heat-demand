@@ -8,7 +8,7 @@
           "relay_entity": "Boiler relay (switch)",
           "valve_devices": "Thermostatic valve devices",
           "valve_entities": "Other valve climate entities (optional, only for climate entities that have no device)",
-          "edit_rooms": "Redefine room grouping",
+                  "edit_rooms": "Re-detect rooms from Home Assistant areas",
           "demand_mode": "How demand is evaluated",
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
@@ -28,9 +28,16 @@
           "outdoor_temp_entity": "Outdoor temperature sensor (optional, improves learning)"
         }
       },
+      "confirm_rooms": {
+        "title": "Confirm rooms",
+        "description": "Rooms were detected from the areas assigned to your valves in Home Assistant:\n\n{rooms}{unassigned}\n\nKeep these rooms?",
+        "data": {
+          "use_detected_rooms": "Use these rooms"
+        }
+      },
       "rooms": {
-        "title": "Group valves into rooms",
-        "description": "Optional. Valves in the same room are treated as one room. Valves you do not group stay separate rooms. Leave the name and valves empty to finish.",
+        "title": "Assign valves to rooms",
+        "description": "{hint}",
         "data": {
           "name": "Room name",
           "valves": "Valves in this room",
@@ -56,7 +63,7 @@
           "relay_entity": "Boiler relay (switch)",
           "valve_devices": "Thermostatic valve devices",
           "valve_entities": "Other valve climate entities (optional, only for climate entities that have no device)",
-          "edit_rooms": "Redefine room grouping",
+          "edit_rooms": "Re-detect rooms from Home Assistant areas",
           "demand_mode": "How demand is evaluated",
           "min_valves": "Valves required to start the boiler (valve count mode)",
           "start_deficit": "Start when largest deficit reaches (deficit mode)",
@@ -76,9 +83,16 @@
           "outdoor_temp_entity": "Outdoor temperature sensor (optional, improves learning)"
         }
       },
+      "confirm_rooms": {
+        "title": "Confirm rooms",
+        "description": "Rooms were detected from the areas assigned to your valves in Home Assistant:\n\n{rooms}{unassigned}\n\nKeep these rooms?",
+        "data": {
+          "use_detected_rooms": "Use these rooms"
+        }
+      },
       "rooms": {
-        "title": "Group valves into rooms",
-        "description": "Optional. Valves in the same room are treated as one room. Valves you do not group stay separate rooms. Leave the name and valves empty to finish.",
+        "title": "Assign valves to rooms",
+        "description": "{hint}",
         "data": {
           "name": "Room name",
           "valves": "Valves in this room",

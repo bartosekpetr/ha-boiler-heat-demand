@@ -11,7 +11,7 @@ Inspect `git status` before editing. Preserve existing worktree changes and do n
 - `custom_components/boiler_heat_demand/demand.py` contains pure, Home-Assistant-independent demand and room logic. Keep it unit-testable.
 - `controller.py` reads Home Assistant states, aggregates rooms, applies demand/failsafe/safety/learning rules, drives and checks the relay, and publishes updates to entities.
 - `learning.py` contains the persisted per-room thermal learner.
-- `config_flow.py` defines setup/options (valve device selection) and room grouping.
+- `config_flow.py` defines setup/options (valve device selection) and room grouping. Rooms are detected from Home Assistant areas (`devices.detect_rooms` -> pure `demand.group_valves_by_area`; the entity's area wins over its device's area). Flow: `_start_rooms` -> `confirm_rooms` (use detected rooms, default yes) -> `rooms` (manual step that only offers valves without an area; if the user declines, all valves) -> finish. With no detected areas it goes straight to the manual step. The options checkbox `edit_rooms` re-runs this; without it the stored rooms are kept. Stored `rooms` format is unchanged.
 - `devices.py` resolves valve devices to climate entities and finds each device's PID heating demand sensor through the registries.
 - `binary_sensor.py`, `sensor.py`, and `button.py` define platform entities.
 - `__init__.py` sets up and unloads the controller. `device_info(entry)` groups every entity for a config entry under one device named **Automated Boiler**.
