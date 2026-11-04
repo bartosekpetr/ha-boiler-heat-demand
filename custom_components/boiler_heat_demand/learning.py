@@ -7,10 +7,11 @@ Each room learns, from its own temperature readings:
 - lag_min: minutes between heating starting and the room starting to rise
 - start_adj / stop_bias: slow self-tuning nudges from observed under/overshoot
 """
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import math
+from dataclasses import asdict, dataclass, field
 
 MIN_WINDOW_S = 900  # rate samples span at least 15 min (sensors are coarse)
 MAX_WINDOW_S = 7200
@@ -20,7 +21,9 @@ READY_CYCLES = 3
 STEP = 0.1
 OVERSHOOT_TOLERANCE = 0.3
 MAX_ANTICIPATION = 2.0
-MAX_PLAUSIBLE_COAST = 10.0  # a larger rise/overshoot is a sensor glitch, not a cycle to learn from
+MAX_PLAUSIBLE_COAST = (
+    10.0  # a larger rise/overshoot is a sensor glitch, not a cycle to learn from
+)
 
 # field -> (low, high, may be None); every stored value is clamped to these on load.
 _FLOAT_FIELDS: dict[str, tuple[float, float, bool]] = {
@@ -70,7 +73,7 @@ class RoomModel:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "RoomModel":
+    def from_dict(cls, data: dict) -> RoomModel:
         """Load a stored model; corrupt, non-numeric or out-of-range fields are ignored/clamped."""
         model = cls()
         if not isinstance(data, dict):
@@ -199,7 +202,11 @@ class RoomLearner:
             self._w_t, self._w_temp, self._w_target = now, temp, target
             return
 
-        if phase == "heat" and not self._lag_done and temp >= self._heat_start_temp + 0.1:
+        if (
+            phase == "heat"
+            and not self._lag_done
+            and temp >= self._heat_start_temp + 0.1
+        ):
             self.model.lag_min = _clamp(
                 _ewma(self.model.lag_min, (now - self._heat_start_t) / 60), 1.0, 60.0
             )
@@ -213,7 +220,9 @@ class RoomLearner:
             self._learn_rate(phase, rate, temp, outdoor)
         self._w_t, self._w_temp = now, temp
 
-    def _learn_rate(self, phase: str, rate: float, temp: float, outdoor: float | None) -> None:
+    def _learn_rate(
+        self, phase: str, rate: float, temp: float, outdoor: float | None
+    ) -> None:
         m = self.model
         if phase == "heat" and 0.05 <= rate <= 10:
             m.heat_rate = _ewma(m.heat_rate, rate)
@@ -230,7 +239,9 @@ class RoomLearner:
         over = max(0.0, self._peak - self._coast_target)
         if rise > MAX_PLAUSIBLE_COAST or over > MAX_PLAUSIBLE_COAST:
             return
-        m.coast_rise = _clamp(_ewma(m.coast_rise if m.cycles else None, rise), 0.0, MAX_ANTICIPATION)
+        m.coast_rise = _clamp(
+            _ewma(m.coast_rise if m.cycles else None, rise), 0.0, MAX_ANTICIPATION
+        )
         m.overshoot = _ewma(m.overshoot if m.cycles else None, over)
         m.cycles += 1
         # Overshot despite early stop: stop earlier. Never reached target: stop later.
@@ -241,7 +252,10 @@ class RoomLearner:
         # Heating started well below the intended threshold: start earlier.
         if self._cycle_start_gap > start_deficit + m.start_adj + OVERSHOOT_TOLERANCE:
             m.start_adj = _clamp(m.start_adj - STEP, -0.3, 1.0)
-        elif m.overshoot <= OVERSHOOT_TOLERANCE / 2 and self._cycle_start_gap < start_deficit:
+        elif (
+            m.overshoot <= OVERSHOOT_TOLERANCE / 2
+            and self._cycle_start_gap < start_deficit
+        ):
             m.start_adj = _clamp(m.start_adj + STEP / 2, -0.3, 1.0)
 
     def _reset_window(self) -> None:

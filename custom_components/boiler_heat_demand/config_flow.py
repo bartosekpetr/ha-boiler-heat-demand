@@ -1,10 +1,10 @@
 """Config and options flow."""
+
 from __future__ import annotations
 
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
@@ -13,10 +13,6 @@ from .const import (
     CONF_ADD_ANOTHER,
     CONF_DEMAND_MODE,
     CONF_EDIT_ROOMS,
-    CONF_ROOM_NAME,
-    CONF_ROOM_SENSOR,
-    CONF_ROOM_VALVES,
-    CONF_USE_DETECTED,
     CONF_HYSTERESIS,
     CONF_LEARNING,
     CONF_MANUAL_TIMEOUT,
@@ -29,14 +25,18 @@ from .const import (
     CONF_PID_STOP,
     CONF_RELAY,
     CONF_RELAY_TIMEOUT,
+    CONF_ROOM_NAME,
+    CONF_ROOM_SENSOR,
+    CONF_ROOM_VALVES,
     CONF_ROOMS,
     CONF_SAFETY_MIN_TEMP,
     CONF_START_DEFICIT,
     CONF_STOP_DEFICIT,
-    CONF_VALVE_FAILSAFE,
+    CONF_USE_DETECTED,
     CONF_VALVE_DEVICES,
-    CONF_VALVES,
+    CONF_VALVE_FAILSAFE,
     CONF_VALVE_TIMEOUT,
+    CONF_VALVES,
     DEFAULT_DEMAND_MODE,
     DEFAULT_HYSTERESIS,
     DEFAULT_LEARNING,
@@ -44,12 +44,12 @@ from .const import (
     DEFAULT_MIN_OFF,
     DEFAULT_MIN_ON,
     DEFAULT_MIN_VALVES,
+    DEFAULT_PID_START,
+    DEFAULT_PID_STOP,
     DEFAULT_RELAY_TIMEOUT,
     DEFAULT_SAFETY_MIN_TEMP,
     DEFAULT_START_DEFICIT,
     DEFAULT_STOP_DEFICIT,
-    DEFAULT_PID_START,
-    DEFAULT_PID_STOP,
     DEFAULT_VALVE_FAILSAFE,
     DEFAULT_VALVE_TIMEOUT,
     DOMAIN,
@@ -69,12 +69,17 @@ def _valve_fields(hass, current_valves: list[str]) -> dict:
     """Valve devices (preferred) plus climate entities that have no device."""
     devices, others = split_valves_by_device(hass, list(current_valves))
     return {
-        vol.Optional(CONF_VALVE_DEVICES, description={"suggested_value": devices or None}): selector.DeviceSelector(
+        vol.Optional(
+            CONF_VALVE_DEVICES, description={"suggested_value": devices or None}
+        ): selector.DeviceSelector(
             selector.DeviceSelectorConfig(
-                multiple=True, entity=selector.EntityFilterSelectorConfig(domain="climate")
+                multiple=True,
+                entity=selector.EntityFilterSelectorConfig(domain="climate"),
             )
         ),
-        vol.Optional(CONF_VALVES, description={"suggested_value": others or None}): selector.EntitySelector(
+        vol.Optional(
+            CONF_VALVES, description={"suggested_value": others or None}
+        ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="climate", multiple=True)
         ),
     }
@@ -96,7 +101,9 @@ def _resolve_valves(hass, user_input: dict[str, Any]) -> str | None:
 
 def _minutes(default: int) -> selector.NumberSelector:
     return selector.NumberSelector(
-        selector.NumberSelectorConfig(min=0, max=120, step=1, mode="box", unit_of_measurement="min")
+        selector.NumberSelectorConfig(
+            min=0, max=120, step=1, mode="box", unit_of_measurement="min"
+        )
     )
 
 
@@ -117,12 +124,18 @@ def _degrees(max_value: float) -> selector.NumberSelector:
 
 
 _DEMAND_MODES = [
-    selector.SelectOptionDict(value=MODE_COUNT, label="Number of valves calling for heat"),
-    selector.SelectOptionDict(value=MODE_DEFICIT, label="Temperature deficit (target - current)"),
+    selector.SelectOptionDict(
+        value=MODE_COUNT, label="Number of valves calling for heat"
+    ),
+    selector.SelectOptionDict(
+        value=MODE_DEFICIT, label="Temperature deficit (target - current)"
+    ),
     selector.SelectOptionDict(value=MODE_PID, label="PID heating demand"),
 ]
 _FAILSAFES = [
-    selector.SelectOptionDict(value=FAILSAFE_IGNORE, label="Ignore the valve (no demand)"),
+    selector.SelectOptionDict(
+        value=FAILSAFE_IGNORE, label="Ignore the valve (no demand)"
+    ),
     selector.SelectOptionDict(value=FAILSAFE_HEAT, label="Assume it calls for heat"),
     selector.SelectOptionDict(value=FAILSAFE_HOLD, label="Keep its last known demand"),
 ]
@@ -130,43 +143,83 @@ _FAILSAFES = [
 
 def _tuning_schema(d: dict[str, Any]) -> dict:
     return {
-        vol.Required(CONF_DEMAND_MODE, default=d.get(CONF_DEMAND_MODE, DEFAULT_DEMAND_MODE)): selector.SelectSelector(
+        vol.Required(
+            CONF_DEMAND_MODE, default=d.get(CONF_DEMAND_MODE, DEFAULT_DEMAND_MODE)
+        ): selector.SelectSelector(
             selector.SelectSelectorConfig(options=_DEMAND_MODES, mode="dropdown")
         ),
-        vol.Required(CONF_MIN_VALVES, default=d.get(CONF_MIN_VALVES, DEFAULT_MIN_VALVES)): selector.NumberSelector(
+        vol.Required(
+            CONF_MIN_VALVES, default=d.get(CONF_MIN_VALVES, DEFAULT_MIN_VALVES)
+        ): selector.NumberSelector(
             selector.NumberSelectorConfig(min=1, max=50, step=1, mode="box")
         ),
-        vol.Required(CONF_START_DEFICIT, default=d.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT)): _degrees(10),
-        vol.Required(CONF_STOP_DEFICIT, default=d.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT)): _degrees(10),
-        vol.Required(CONF_PID_START, default=d.get(CONF_PID_START, DEFAULT_PID_START)): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=100, step=1, mode="box", unit_of_measurement="%")
+        vol.Required(
+            CONF_START_DEFICIT, default=d.get(CONF_START_DEFICIT, DEFAULT_START_DEFICIT)
+        ): _degrees(10),
+        vol.Required(
+            CONF_STOP_DEFICIT, default=d.get(CONF_STOP_DEFICIT, DEFAULT_STOP_DEFICIT)
+        ): _degrees(10),
+        vol.Required(
+            CONF_PID_START, default=d.get(CONF_PID_START, DEFAULT_PID_START)
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=100, step=1, mode="box", unit_of_measurement="%"
+            )
         ),
-        vol.Required(CONF_PID_STOP, default=d.get(CONF_PID_STOP, DEFAULT_PID_STOP)): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=100, step=1, mode="box", unit_of_measurement="%")
+        vol.Required(
+            CONF_PID_STOP, default=d.get(CONF_PID_STOP, DEFAULT_PID_STOP)
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=100, step=1, mode="box", unit_of_measurement="%"
+            )
         ),
-        vol.Required(CONF_MIN_ON, default=d.get(CONF_MIN_ON, DEFAULT_MIN_ON)): _minutes(DEFAULT_MIN_ON),
-        vol.Required(CONF_MIN_OFF, default=d.get(CONF_MIN_OFF, DEFAULT_MIN_OFF)): _minutes(DEFAULT_MIN_OFF),
-        vol.Required(CONF_HYSTERESIS, default=d.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0, max=3, step=0.1, mode="box", unit_of_measurement="°C")
+        vol.Required(CONF_MIN_ON, default=d.get(CONF_MIN_ON, DEFAULT_MIN_ON)): _minutes(
+            DEFAULT_MIN_ON
         ),
-        vol.Required(CONF_SAFETY_MIN_TEMP, default=d.get(CONF_SAFETY_MIN_TEMP, DEFAULT_SAFETY_MIN_TEMP)): _degrees(30),
+        vol.Required(
+            CONF_MIN_OFF, default=d.get(CONF_MIN_OFF, DEFAULT_MIN_OFF)
+        ): _minutes(DEFAULT_MIN_OFF),
+        vol.Required(
+            CONF_HYSTERESIS, default=d.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=3, step=0.1, mode="box", unit_of_measurement="°C"
+            )
+        ),
+        vol.Required(
+            CONF_SAFETY_MIN_TEMP,
+            default=d.get(CONF_SAFETY_MIN_TEMP, DEFAULT_SAFETY_MIN_TEMP),
+        ): _degrees(30),
         vol.Required(
             CONF_VALVE_TIMEOUT,
             default=d.get(CONF_VALVE_TIMEOUT, DEFAULT_VALVE_TIMEOUT),
         ): _timeout_minutes(),
-        vol.Required(CONF_VALVE_FAILSAFE, default=d.get(CONF_VALVE_FAILSAFE, DEFAULT_VALVE_FAILSAFE)): selector.SelectSelector(
+        vol.Required(
+            CONF_VALVE_FAILSAFE,
+            default=d.get(CONF_VALVE_FAILSAFE, DEFAULT_VALVE_FAILSAFE),
+        ): selector.SelectSelector(
             selector.SelectSelectorConfig(options=_FAILSAFES, mode="dropdown")
         ),
         vol.Required(
             CONF_MANUAL_TIMEOUT,
             default=d.get(CONF_MANUAL_TIMEOUT, DEFAULT_MANUAL_TIMEOUT),
         ): _timeout_minutes(),
-        vol.Required(CONF_RELAY_TIMEOUT, default=d.get(CONF_RELAY_TIMEOUT, DEFAULT_RELAY_TIMEOUT)): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=1, max=120, step=1, mode="box", unit_of_measurement="min")
+        vol.Required(
+            CONF_RELAY_TIMEOUT, default=d.get(CONF_RELAY_TIMEOUT, DEFAULT_RELAY_TIMEOUT)
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1, max=120, step=1, mode="box", unit_of_measurement="min"
+            )
         ),
-        vol.Optional(CONF_NOTIFY, description={"suggested_value": d.get(CONF_NOTIFY)}): selector.TextSelector(),
-        vol.Required(CONF_LEARNING, default=d.get(CONF_LEARNING, DEFAULT_LEARNING)): selector.BooleanSelector(),
-        vol.Optional(CONF_OUTDOOR, description={"suggested_value": d.get(CONF_OUTDOOR)}): selector.EntitySelector(
+        vol.Optional(
+            CONF_NOTIFY, description={"suggested_value": d.get(CONF_NOTIFY)}
+        ): selector.TextSelector(),
+        vol.Required(
+            CONF_LEARNING, default=d.get(CONF_LEARNING, DEFAULT_LEARNING)
+        ): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_OUTDOOR, description={"suggested_value": d.get(CONF_OUTDOOR)}
+        ): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=["sensor", "weather"])
         ),
     }
@@ -207,7 +260,8 @@ class _RoomsMixin:
                 self._manual_valves = list(self._data[CONF_VALVES])
             return await self._next_room_step()
         rooms = "\n".join(
-            f"- **{room['name']}**: " + ", ".join(self._valve_label(v) for v in room["valves"])
+            f"- **{room['name']}**: "
+            + ", ".join(self._valve_label(v) for v in room["valves"])
             for room in self._detected
         )
         unassigned = ""
@@ -219,7 +273,11 @@ class _RoomsMixin:
         return self.async_show_form(
             step_id="confirm_rooms",
             data_schema=vol.Schema(
-                {vol.Required(CONF_USE_DETECTED, default=True): selector.BooleanSelector()}
+                {
+                    vol.Required(
+                        CONF_USE_DETECTED, default=True
+                    ): selector.BooleanSelector()
+                }
             ),
             description_placeholders={"rooms": rooms, "unassigned": unassigned},
         )
@@ -239,13 +297,19 @@ class _RoomsMixin:
                 vol.Optional(CONF_ROOM_NAME): selector.TextSelector(),
                 vol.Optional(CONF_ROOM_VALVES): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="climate", multiple=True, include_entities=self._remaining_valves()
+                        domain="climate",
+                        multiple=True,
+                        include_entities=self._remaining_valves(),
                     )
                 ),
                 vol.Optional(CONF_ROOM_SENSOR): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+                    selector.EntitySelectorConfig(
+                        domain="sensor", device_class="temperature"
+                    )
                 ),
-                vol.Required(CONF_ADD_ANOTHER, default=False): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_ADD_ANOTHER, default=False
+                ): selector.BooleanSelector(),
             }
         )
 
@@ -272,7 +336,9 @@ class _RoomsMixin:
                 taken = {e for r in self._rooms for e in r[CONF_ROOM_VALVES]}
                 if not name or not valves:
                     errors["base"] = "room_incomplete"
-                elif any(e in taken for e in valves) or name in {r[CONF_ROOM_NAME] for r in self._rooms}:
+                elif any(e in taken for e in valves) or name in {
+                    r[CONF_ROOM_NAME] for r in self._rooms
+                }:
                     errors["base"] = "room_duplicate"
                 else:
                     self._rooms.append(
@@ -282,7 +348,9 @@ class _RoomsMixin:
                             "temp_sensor": user_input.get(CONF_ROOM_SENSOR) or None,
                         }
                     )
-            if not errors and (not user_input.get(CONF_ADD_ANOTHER) or not self._remaining_valves()):
+            if not errors and (
+                not user_input.get(CONF_ADD_ANOTHER) or not self._remaining_valves()
+            ):
                 return await self._finish()
             if not errors:
                 return self._rooms_form()
@@ -312,7 +380,9 @@ class BoilerConfigFlow(_RoomsMixin, config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
             self._data = dict(user_input)
             return await self._start_rooms()
-        return self.async_show_form(step_id="user", data_schema=vol.Schema(self._user_schema()))
+        return self.async_show_form(
+            step_id="user", data_schema=vol.Schema(self._user_schema())
+        )
 
     def _user_schema(self) -> dict:
         return {
@@ -324,7 +394,9 @@ class BoilerConfigFlow(_RoomsMixin, config_entries.ConfigFlow, domain=DOMAIN):
         }
 
     async def _finish(self):
-        return self.async_create_entry(title="Boiler", data={**self._data, CONF_ROOMS: self._rooms})
+        return self.async_create_entry(
+            title="Boiler", data={**self._data, CONF_ROOMS: self._rooms}
+        )
 
     @staticmethod
     @callback
@@ -353,7 +425,9 @@ class BoilerOptionsFlow(_RoomsMixin, config_entries.OptionsFlow):
                 return await self._start_rooms()
             self._rooms = cur.get(CONF_ROOMS, [])
             return await self._finish()
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(self._options_schema(cur)))
+        return self.async_show_form(
+            step_id="init", data_schema=vol.Schema(self._options_schema(cur))
+        )
 
     def _options_schema(self, cur: dict[str, Any]) -> dict:
         return {

@@ -1,4 +1,5 @@
 """Number of valves calling for heat."""
+
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
@@ -11,7 +12,9 @@ from . import device_info
 from .const import DOMAIN
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+) -> None:
     async_add_entities(
         [
             CallingValvesSensor(hass.data[DOMAIN][entry.entry_id], entry),

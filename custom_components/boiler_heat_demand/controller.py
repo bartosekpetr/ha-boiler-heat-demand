@@ -1,4 +1,5 @@
 """Evaluates valve demand and drives the boiler relay."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,13 +8,16 @@ import time
 from collections.abc import Callable
 from datetime import timedelta
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
-from homeassistant.components import persistent_notification
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 from homeassistant.helpers.start import async_at_started
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -37,8 +41,8 @@ from .const import (
     CONF_START_DEFICIT,
     CONF_STOP_DEFICIT,
     CONF_VALVE_FAILSAFE,
-    CONF_VALVES,
     CONF_VALVE_TIMEOUT,
+    CONF_VALVES,
     DEFAULT_DEMAND_MODE,
     DEFAULT_HYSTERESIS,
     DEFAULT_LEARNING,
@@ -46,12 +50,12 @@ from .const import (
     DEFAULT_MIN_OFF,
     DEFAULT_MIN_ON,
     DEFAULT_MIN_VALVES,
+    DEFAULT_PID_START,
+    DEFAULT_PID_STOP,
     DEFAULT_RELAY_TIMEOUT,
     DEFAULT_SAFETY_MIN_TEMP,
     DEFAULT_START_DEFICIT,
     DEFAULT_STOP_DEFICIT,
-    DEFAULT_PID_START,
-    DEFAULT_PID_STOP,
     DEFAULT_VALVE_FAILSAFE,
     DEFAULT_VALVE_TIMEOUT,
     DOMAIN,
@@ -109,7 +113,9 @@ class BoilerController:
         self.pid_sources: dict[str, str] = {}
         self.safety_override = False
         self.learners: dict[str, RoomLearner] = {}
-        self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.learning")
+        self._store = Store(
+            hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.learning"
+        )
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[Callable[[], None]] = []
         # Evaluations run one at a time and never after stop(), so none can command the relay late.
@@ -164,7 +170,9 @@ class BoilerController:
         if manual_override_expired(
             self._manual_set_at, time.monotonic(), self._manual_timeout_seconds()
         ):
-            _LOGGER.info("Manual boiler override expired, returning to automatic control")
+            _LOGGER.info(
+                "Manual boiler override expired, returning to automatic control"
+            )
             self.manual_override = None
             self._manual_set_at = None
 
@@ -186,7 +194,9 @@ class BoilerController:
             last_reported = getattr(state, "last_reported", None) or state.last_updated
             if valve_report_is_stale(last_reported, now, timeout_seconds):
                 return None
-        return parse_temperature(state.state, state.attributes.get("unit_of_measurement"))
+        return parse_temperature(
+            state.state, state.attributes.get("unit_of_measurement")
+        )
 
     def _outdoor_temp(self, cfg: dict) -> float | None:
         return self._sensor_temp(cfg.get(CONF_OUTDOOR))
@@ -204,7 +214,9 @@ class BoilerController:
         entities = [*cfg[CONF_VALVES], cfg[CONF_RELAY]]
         entities += [r.sensor for r in self._rooms(cfg) if r.sensor]
         entities += [e for e in map(self._pid_entity, cfg[CONF_VALVES]) if e]
-        self._unsubs.append(async_track_state_change_event(self.hass, entities, self._on_change))
+        self._unsubs.append(
+            async_track_state_change_event(self.hass, entities, self._on_change)
+        )
         # Re-evaluate periodically so min on/off lockouts expire without a state change.
         self._unsubs.append(
             async_track_time_interval(self.hass, self._on_timer, timedelta(seconds=30))
@@ -265,7 +277,10 @@ class BoilerController:
             pid_source = pid_attribute
         if pid_demand is None and pid_entity:
             pid_state = self.hass.states.get(pid_entity)
-            if pid_state is not None and pid_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            if pid_state is not None and pid_state.state not in (
+                STATE_UNAVAILABLE,
+                STATE_UNKNOWN,
+            ):
                 pid_demand = parse_percentage(pid_state.state)
                 pid_source = pid_entity
         if pid_demand is None:
@@ -355,7 +370,9 @@ class BoilerController:
         for room_cfg in self._rooms(cfg):
             name = room_cfg.name
             snaps = [
-                self._snapshot(e, now, timeout_seconds, pid_attribute, self._pid_entity(e))
+                self._snapshot(
+                    e, now, timeout_seconds, pid_attribute, self._pid_entity(e)
+                )
                 for e in room_cfg.valves
             ]
             sensor_temp = self._sensor_temp(room_cfg.sensor, now, sensor_timeout)
@@ -367,7 +384,11 @@ class BoilerController:
             )
             if not room.available:
                 # A cold room sensor still triggers frost protection while its valves are offline.
-                if safety_temp > 0 and sensor_temp is not None and sensor_temp <= safety_temp:
+                if (
+                    safety_temp > 0
+                    and sensor_temp is not None
+                    and sensor_temp <= safety_temp
+                ):
                     too_cold = True
                 # Every valve of the room is unresponsive: apply the configured failsafe.
                 if failsafe == FAILSAFE_HEAT or (
@@ -400,7 +421,11 @@ class BoilerController:
                     start_deficit,
                 )
                 if mode == MODE_DEFICIT:
-                    base = deficit > stop_deficit if was_calling else deficit >= start_deficit
+                    base = (
+                        deficit > stop_deficit
+                        if was_calling
+                        else deficit >= start_deficit
+                    )
                 else:
                     base = room.calling
                 wants_heat = learned_call(
@@ -427,7 +452,9 @@ class BoilerController:
         self.pid_sources = pid_sources
         self.max_deficit = max(deficits) if deficits else None
         self.max_pid_demand = max(pid_demands) if pid_demands else None
-        self.cumulative_temp_delta = sum(positive_deficits) if positive_deficits else None
+        self.cumulative_temp_delta = (
+            sum(positive_deficits) if positive_deficits else None
+        )
         self.cumulative_pid_demand = sum(pid_demands) if pid_demands else None
         self.safety_override = too_cold
         effective_deficit = max(effective) if effective else None
@@ -522,7 +549,13 @@ class BoilerController:
             if self._relay_bad_since is None:
                 self._relay_bad_since = time.monotonic()
             if time.monotonic() - self._relay_bad_since >= timeout:
-                last = "on" if self._commanded else "off" if self._commanded is False else "unknown"
+                last = (
+                    "on"
+                    if self._commanded
+                    else "off"
+                    if self._commanded is False
+                    else "unknown"
+                )
                 self._raise_alert(
                     "relay_unavailable",
                     f"Boiler relay {relay} has been unavailable for over "
@@ -576,7 +609,9 @@ class BoilerController:
                     "title": title,
                     "message": message,
                     "data": {
-                        "push": {"sound": {"name": "default", "critical": 1, "volume": 1.0}},
+                        "push": {
+                            "sound": {"name": "default", "critical": 1, "volume": 1.0}
+                        },
                         "ttl": 0,
                         "priority": "high",
                     },

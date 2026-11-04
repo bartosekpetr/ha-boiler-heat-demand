@@ -1,4 +1,5 @@
 """Boiler Heat Demand integration."""
+
 from __future__ import annotations
 
 import logging
@@ -61,4 +62,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             blocking=True,
         )
     except Exception as err:  # noqa: BLE001 - removal must still complete
-        _LOGGER.error("Could not turn off %s while removing the integration: %s", relay, err)
+        _LOGGER.error(
+            "Could not turn off %s while removing the integration: %s", relay, err
+        )

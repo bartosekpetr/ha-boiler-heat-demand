@@ -1,4 +1,5 @@
 """Resolve valve devices to their climate and PID demand entities."""
+
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
@@ -22,12 +23,16 @@ def valve_area(hass: HomeAssistant, entity_id: str) -> tuple[str, str] | None:
     return (area.id, area.name) if area else None
 
 
-def detect_rooms(hass: HomeAssistant, valves: list[str]) -> tuple[list[dict], list[str]]:
+def detect_rooms(
+    hass: HomeAssistant, valves: list[str]
+) -> tuple[list[dict], list[str]]:
     """Group valves by Home Assistant area; returns (rooms, valves that have no area)."""
     return group_valves_by_area(valves, {v: valve_area(hass, v) for v in valves})
 
 
-def climate_entities_for_devices(hass: HomeAssistant, device_ids: list[str]) -> tuple[list[str], list[str]]:
+def climate_entities_for_devices(
+    hass: HomeAssistant, device_ids: list[str]
+) -> tuple[list[str], list[str]]:
     """Return (climate entity ids, device ids that have no climate entity)."""
     registry = er.async_get(hass)
     climates: list[str] = []
@@ -45,7 +50,9 @@ def climate_entities_for_devices(hass: HomeAssistant, device_ids: list[str]) -> 
     return climates, without_climate
 
 
-def split_valves_by_device(hass: HomeAssistant, entity_ids: list[str]) -> tuple[list[str], list[str]]:
+def split_valves_by_device(
+    hass: HomeAssistant, entity_ids: list[str]
+) -> tuple[list[str], list[str]]:
     """Return (device ids, climate entities that do not belong to a device)."""
     registry = er.async_get(hass)
     devices: list[str] = []

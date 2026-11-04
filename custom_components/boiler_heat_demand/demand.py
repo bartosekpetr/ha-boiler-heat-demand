@@ -1,10 +1,12 @@
 """Pure heat-demand logic. No Home Assistant imports so it stays unit-testable."""
+
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-import math
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 TEMPERATURE_MIN_C = -50.0
 TEMPERATURE_MAX_C = 60.0
@@ -53,7 +55,10 @@ def manual_override_expired(
     set_at: float | None, now: float, timeout_seconds: float
 ) -> bool:
     """True when a manual boiler override has outlived its timeout (0 = never expires)."""
-    return timeout_seconds > 0 and set_at is not None and now - set_at >= timeout_seconds
+    return (
+        timeout_seconds > 0 and set_at is not None and now - set_at >= timeout_seconds
+    )
+
 
 # Well-known TRV attributes that report heating demand / valve opening as 0-100 %.
 PID_ATTRIBUTE_CANDIDATES = (
@@ -70,10 +75,31 @@ PID_ATTRIBUTE_CANDIDATES = (
     "valve_open_percent",
     "valve_level",
 )
-_PID_NAME_HINTS = ("pid", "heating_demand", "heat_demand", "valve_position", "valve_opening")
+_PID_NAME_HINTS = (
+    "pid",
+    "heating_demand",
+    "heat_demand",
+    "valve_position",
+    "valve_opening",
+)
 _PID_NAME_EXCLUDES = (
-    "target", "setpoint", "set_point", "offset", "min", "max", "limit", "window",
-    "kp", "ki", "kd", "gain", "threshold", "calibration", "mode", "time", "interval",
+    "target",
+    "setpoint",
+    "set_point",
+    "offset",
+    "min",
+    "max",
+    "limit",
+    "window",
+    "kp",
+    "ki",
+    "kd",
+    "gain",
+    "threshold",
+    "calibration",
+    "mode",
+    "time",
+    "interval",
 )
 
 
@@ -156,7 +182,9 @@ def find_pid_entity(entries: Iterable[Mapping[str, Any]]) -> str | None:
             if fuzzy:
                 score = 1
         if score and (
-            best is None or score > best[0] or (score == best[0] and entity_id < best[1])
+            best is None
+            or score > best[0]
+            or (score == best[0] and entity_id < best[1])
         ):
             best = (score, entity_id)
     return best[1] if best else None
@@ -189,7 +217,9 @@ class ValveState:
     pid_source: str | None = None
 
 
-def valve_calls_for_heat(valve: ValveState, hysteresis: float, currently_calling: bool) -> bool:
+def valve_calls_for_heat(
+    valve: ValveState, hysteresis: float, currently_calling: bool
+) -> bool:
     """Return True if the valve wants heat.
 
     Prefers the valve's own hvac_action. Falls back to temperatures with
@@ -364,7 +394,9 @@ def aggregate_room(
     calling = False
     for v in active:
         if v.hvac_action is None and temp is not None:
-            v = ValveState(v.entity_id, v.available, v.hvac_mode, None, temp, v.target_temp)
+            v = ValveState(
+                v.entity_id, v.available, v.hvac_mode, None, temp, v.target_temp
+            )
         if valve_calls_for_heat(v, hysteresis, currently_calling):
             calling = True
             break
@@ -411,7 +443,9 @@ def build_rooms(valves: list[str], rooms: list[dict] | None) -> list[RoomConfig]
     used: set[str] = set()
     names: set[str] = set()
     for room in rooms or []:
-        members = tuple(e for e in room.get("valves", []) if e in valves and e not in used)
+        members = tuple(
+            e for e in room.get("valves", []) if e in valves and e not in used
+        )
         name = (room.get("name") or "").strip()
         if not members or not name or name in names:
             continue

@@ -1,4 +1,5 @@
 """Reset learning button."""
+
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
@@ -10,7 +11,9 @@ from . import device_info
 from .const import DOMAIN
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+) -> None:
     controller = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [

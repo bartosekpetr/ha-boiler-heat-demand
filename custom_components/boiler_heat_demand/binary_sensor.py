@@ -1,4 +1,5 @@
 """Heat demand binary sensor."""
+
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -9,7 +10,9 @@ from . import device_info
 from .const import DOMAIN
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+) -> None:
     async_add_entities([HeatDemandSensor(hass.data[DOMAIN][entry.entry_id], entry)])
 
 
@@ -36,7 +39,9 @@ class HeatDemandSensor(BinarySensorEntity):
             "calling_rooms": list(self._controller.decision.calling),
             "max_temperature_deficit": self._controller.max_deficit,
             "safety_override": self._controller.safety_override,
-            "manual_override": {True: "on", False: "off"}.get(self._controller.manual_override),
+            "manual_override": {True: "on", False: "off"}.get(
+                self._controller.manual_override
+            ),
             "manual_override_seconds_left": self._controller.manual_override_seconds_left,
             "alerts": sorted(self._controller.alerts),
         }

@@ -1,15 +1,20 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
 import sys
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 if sys.platform == "win32":
-    pytest.skip("Home Assistant integration tests run on Linux in CI", allow_module_level=True)
+    pytest.skip(
+        "Home Assistant integration tests run on Linux in CI", allow_module_level=True
+    )
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_mock_service,
+)
 
 from custom_components.boiler_heat_demand import async_remove_entry, device_info
 from custom_components.boiler_heat_demand.binary_sensor import HeatDemandSensor
@@ -52,9 +57,7 @@ async def test_controller_auto_detects_pid_attribute(hass):
     controller = object.__new__(BoilerController)
     controller.hass = hass
 
-    snapshot = controller._snapshot(
-        "climate.living_room", datetime.now(timezone.utc), 0, None
-    )
+    snapshot = controller._snapshot("climate.living_room", datetime.now(UTC), 0, None)
 
     assert snapshot.available
     assert snapshot.pid_demand == 42.5
@@ -72,7 +75,7 @@ async def test_controller_legacy_attribute_overrides_detection(hass):
     controller.hass = hass
 
     snapshot = controller._snapshot(
-        "climate.living_room", datetime.now(timezone.utc), 0, "custom_output"
+        "climate.living_room", datetime.now(UTC), 0, "custom_output"
     )
 
     assert snapshot.pid_demand == 60
@@ -86,7 +89,7 @@ async def test_controller_ignores_valves_without_pid_attribute(hass):
     for attrs in ({}, {"pid": "not-a-number"}, {"pid": -1}, {"pid": 101}):
         hass.states.async_set("climate.living_room", "heat", attrs)
         snapshot = controller._snapshot(
-            "climate.living_room", datetime.now(timezone.utc), 0, None
+            "climate.living_room", datetime.now(UTC), 0, None
         )
         assert snapshot.pid_demand is None
         assert snapshot.pid_source is None
@@ -175,7 +178,8 @@ async def test_pid_demand_drives_relay_and_diagnostic_value(hass):
 
 def _register_valve_device(hass, name, with_pid_sensor=True):
     """Create a device shaped like the ZHA iTRV: climate + HVAC action + PI heating demand."""
-    from homeassistant.helpers import device_registry as dr, entity_registry as er
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
 
     entry = MockConfigEntry(domain="zha")
     entry.add_to_hass(hass)
@@ -187,19 +191,32 @@ def _register_valve_device(hass, name, with_pid_sensor=True):
     registry = er.async_get(hass)
     object_id = name.lower().replace(" ", "_")
     climate = registry.async_get_or_create(
-        "climate", "zha", f"{name}-climate", suggested_object_id=object_id,
-        device_id=device.id, config_entry=entry,
+        "climate",
+        "zha",
+        f"{name}-climate",
+        suggested_object_id=object_id,
+        device_id=device.id,
+        config_entry=entry,
     )
     registry.async_get_or_create(
-        "sensor", "zha", f"{name}-hvac_action", suggested_object_id=f"{object_id}_hvac_action",
-        device_id=device.id, config_entry=entry, original_name="HVAC action",
+        "sensor",
+        "zha",
+        f"{name}-hvac_action",
+        suggested_object_id=f"{object_id}_hvac_action",
+        device_id=device.id,
+        config_entry=entry,
+        original_name="HVAC action",
     )
     pid = None
     if with_pid_sensor:
         pid = registry.async_get_or_create(
-            "sensor", "zha", f"{name}-pi_heating_demand",
+            "sensor",
+            "zha",
+            f"{name}-pi_heating_demand",
             suggested_object_id=f"{object_id}_pi_heating_demand",
-            device_id=device.id, config_entry=entry, original_name="Pi heating demand",
+            device_id=device.id,
+            config_entry=entry,
+            original_name="Pi heating demand",
             unit_of_measurement="%",
         )
     return device, climate.entity_id, pid.entity_id if pid else None
@@ -208,7 +225,9 @@ def _register_valve_device(hass, name, with_pid_sensor=True):
 @pytest.mark.usefixtures("enable_custom_integrations")
 async def test_device_resolves_to_climate_and_pid_sensor(hass):
     device, climate, pid = _register_valve_device(hass, "Chodba vstup")
-    other_device, other_climate, _ = _register_valve_device(hass, "Loznice", with_pid_sensor=False)
+    other_device, other_climate, _ = _register_valve_device(
+        hass, "Loznice", with_pid_sensor=False
+    )
 
     assert climate == "climate.chodba_vstup"
     assert pid == "sensor.chodba_vstup_pi_heating_demand"
@@ -225,7 +244,9 @@ async def test_device_resolves_to_climate_and_pid_sensor(hass):
 async def test_split_valves_by_device_keeps_legacy_climate_entities(hass):
     device, climate, _ = _register_valve_device(hass, "Chodba vstup")
 
-    devices, others = split_valves_by_device(hass, [climate, "climate.generic_thermostat"])
+    devices, others = split_valves_by_device(
+        hass, [climate, "climate.generic_thermostat"]
+    )
 
     assert devices == [device.id]
     assert others == ["climate.generic_thermostat"]
@@ -274,13 +295,15 @@ async def test_climate_attribute_is_used_when_the_device_has_no_pid_sensor(hass)
     _, climate, pid = _register_valve_device(hass, "Loznice", with_pid_sensor=False)
     assert pid is None
     hass.states.async_set(
-        climate, "heat", {"current_temperature": 20, "temperature": 21, "pi_heating_demand": 47}
+        climate,
+        "heat",
+        {"current_temperature": 20, "temperature": 21, "pi_heating_demand": 47},
     )
     controller = object.__new__(BoilerController)
     controller.hass = hass
 
     snapshot = controller._snapshot(
-        climate, datetime.now(timezone.utc), 0, None, controller._pid_entity(climate)
+        climate, datetime.now(UTC), 0, None, controller._pid_entity(climate)
     )
 
     assert snapshot.pid_demand == 47
@@ -294,7 +317,13 @@ def _hall_controller(hass, **options):
         data={
             "relay_entity": "switch.boiler",
             "valve_entities": ["climate.hall"],
-            "rooms": [{"name": "Hall", "valves": ["climate.hall"], "temp_sensor": "sensor.hall_temp"}],
+            "rooms": [
+                {
+                    "name": "Hall",
+                    "valves": ["climate.hall"],
+                    "temp_sensor": "sensor.hall_temp",
+                }
+            ],
             "learning_enabled": False,
             "valve_timeout_minutes": 0,
             **options,
@@ -307,10 +336,14 @@ def _hall_controller(hass, **options):
 
 @pytest.mark.usefixtures("enable_custom_integrations")
 @pytest.mark.parametrize("bad_value", ["nan", "inf", "-inf", "999", "garbage"])
-async def test_invalid_room_sensor_falls_back_to_valve_and_keeps_frost_protection(hass, bad_value):
+async def test_invalid_room_sensor_falls_back_to_valve_and_keeps_frost_protection(
+    hass, bad_value
+):
     hass.states.async_set("switch.boiler", "off")
     hass.states.async_set(
-        "climate.hall", "heat", {"hvac_action": "idle", "current_temperature": 5, "temperature": 21}
+        "climate.hall",
+        "heat",
+        {"hvac_action": "idle", "current_temperature": 5, "temperature": 21},
     )
     hass.states.async_set("sensor.hall_temp", bad_value, {"unit_of_measurement": "°C"})
     controller = _hall_controller(hass)
@@ -342,11 +375,17 @@ async def test_frost_protection_uses_room_sensor_when_all_valves_are_offline(has
 async def test_room_sensor_units_are_converted_and_stale_sensors_ignored(hass):
     controller = _hall_controller(hass)
     hass.states.async_set("sensor.hall_temp", "41", {"unit_of_measurement": "°F"})
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     assert abs(controller._sensor_temp("sensor.hall_temp", now, 7200) - 5.0) < 1e-9
-    assert controller._sensor_temp("sensor.hall_temp", now + timedelta(hours=3), 7200) is None
-    assert controller._sensor_temp("sensor.hall_temp", now + timedelta(hours=3), 0) is not None
+    assert (
+        controller._sensor_temp("sensor.hall_temp", now + timedelta(hours=3), 7200)
+        is None
+    )
+    assert (
+        controller._sensor_temp("sensor.hall_temp", now + timedelta(hours=3), 0)
+        is not None
+    )
     hass.states.async_set("sensor.hall_temp", "41", {"unit_of_measurement": "%"})
     assert controller._sensor_temp("sensor.hall_temp") is None
 
@@ -357,12 +396,14 @@ async def test_valve_temperatures_follow_the_home_assistant_unit_system(hass):
 
     hass.config.units = US_CUSTOMARY_SYSTEM
     hass.states.async_set(
-        "climate.hall", "heat", {"current_temperature": 68, "temperature": 71.6, "hvac_action": "idle"}
+        "climate.hall",
+        "heat",
+        {"current_temperature": 68, "temperature": 71.6, "hvac_action": "idle"},
     )
     controller = object.__new__(BoilerController)
     controller.hass = hass
 
-    snapshot = controller._snapshot("climate.hall", datetime.now(timezone.utc), 0, None)
+    snapshot = controller._snapshot("climate.hall", datetime.now(UTC), 0, None)
 
     assert abs(snapshot.current_temp - 20.0) < 1e-9
     assert abs(snapshot.target_temp - 22.0) < 1e-9
@@ -372,7 +413,9 @@ async def test_valve_temperatures_follow_the_home_assistant_unit_system(hass):
 async def test_manual_override_expires(hass):
     hass.states.async_set("switch.boiler", "off")
     hass.states.async_set(
-        "climate.hall", "heat", {"hvac_action": "idle", "current_temperature": 20, "temperature": 21}
+        "climate.hall",
+        "heat",
+        {"hvac_action": "idle", "current_temperature": 20, "temperature": 21},
     )
     hass.states.async_set("sensor.hall_temp", "20", {"unit_of_measurement": "°C"})
     controller = _hall_controller(hass, manual_override_minutes=30)
@@ -416,7 +459,9 @@ async def test_evaluation_failure_raises_an_alert_and_recovers(hass):
     await controller.async_evaluate()
 
     key, message = controller._raise_alert.call_args.args
-    assert key == "evaluation_failed" and "boom" in message and "switch.boiler" in message
+    assert (
+        key == "evaluation_failed" and "boom" in message and "switch.boiler" in message
+    )
     controller._clear_alert.assert_not_called()
 
     controller._async_evaluate = AsyncMock()
@@ -444,7 +489,12 @@ async def test_one_failing_entity_does_not_block_the_other_listeners(hass):
 async def test_corrupt_learning_storage_does_not_break_loading(hass):
     controller = _hall_controller(hass)
     controller._store.async_load = AsyncMock(
-        return_value={"rooms": {"Hall": {"lag_min": None, "heat_rate": "fast", "cycles": 5}, 7: {}}}
+        return_value={
+            "rooms": {
+                "Hall": {"lag_min": None, "heat_rate": "fast", "cycles": 5},
+                7: {},
+            }
+        }
     )
 
     await controller.async_load()
@@ -477,7 +527,8 @@ async def test_removing_the_integration_turns_a_running_relay_off(hass):
 
 def _area_valve(hass, name, area_id=None, entity_area_id=None):
     """A climate entity on its own device, optionally with a device area and/or an entity area."""
-    from homeassistant.helpers import device_registry as dr, entity_registry as er
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
 
     entry = MockConfigEntry(domain="zha")
     entry.add_to_hass(hass)
@@ -488,8 +539,14 @@ def _area_valve(hass, name, area_id=None, entity_area_id=None):
         dr.async_get(hass).async_update_device(device.id, area_id=area_id)
     registry = er.async_get(hass)
     climate = registry.async_get_or_create(
-        "climate", "zha", f"{name}-climate", suggested_object_id=name.lower().replace(" ", "_"),
-        device_id=device.id, config_entry=entry, has_entity_name=True, original_name="Thermostat",
+        "climate",
+        "zha",
+        f"{name}-climate",
+        suggested_object_id=name.lower().replace(" ", "_"),
+        device_id=device.id,
+        config_entry=entry,
+        has_entity_name=True,
+        original_name="Thermostat",
     )
     if entity_area_id:
         registry.async_update_entity(climate.entity_id, area_id=entity_area_id)
@@ -501,7 +558,12 @@ def _room_flow(hass, valves):
     from custom_components.boiler_heat_demand.config_flow import BoilerConfigFlow
 
     flow = BoilerConfigFlow()
-    flow.hass, flow.handler, flow.flow_id, flow.context = hass, DOMAIN, "test", {"source": "user"}
+    flow.hass, flow.handler, flow.flow_id, flow.context = (
+        hass,
+        DOMAIN,
+        "test",
+        {"source": "user"},
+    )
     flow._data = {"relay_entity": "switch.boiler", "valve_entities": valves}
     return flow
 
@@ -523,11 +585,16 @@ async def test_valve_area_and_room_detection(hass):
     hall = ar.async_get(hass).async_create("Chodba")
     heating = _area_valve(hass, "Ložnice topeni", area_id=bedroom.id)
     window = _area_valve(hass, "Ložnice okno", area_id=bedroom.id)
-    entrance = _area_valve(hass, "Chodba vstup", area_id=bedroom.id, entity_area_id=hall.id)
+    entrance = _area_valve(
+        hass, "Chodba vstup", area_id=bedroom.id, entity_area_id=hall.id
+    )
     cellar = _area_valve(hass, "Sklep")
 
     assert valve_area(hass, heating) == (bedroom.id, "Ložnice")
-    assert valve_area(hass, entrance) == (hall.id, "Chodba")  # an entity's own area wins
+    assert valve_area(hass, entrance) == (
+        hall.id,
+        "Chodba",
+    )  # an entity's own area wins
     assert valve_area(hass, cellar) is None
     assert valve_area(hass, "climate.not_in_the_registry") is None
     rooms, unassigned = detect_rooms(hass, [heating, window, entrance, cellar])
@@ -539,7 +606,9 @@ async def test_valve_area_and_room_detection(hass):
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_flow_confirms_detected_rooms_and_only_asks_for_valves_without_an_area(hass):
+async def test_flow_confirms_detected_rooms_and_only_asks_for_valves_without_an_area(
+    hass,
+):
     from homeassistant.helpers import area_registry as ar
 
     bedroom = ar.async_get(hass).async_create("Ložnice")
@@ -550,7 +619,10 @@ async def test_flow_confirms_detected_rooms_and_only_asks_for_valves_without_an_
 
     form = await flow._start_rooms()
     assert form["step_id"] == "confirm_rooms"
-    assert "**Ložnice**: Ložnice topeni, Ložnice okno" in form["description_placeholders"]["rooms"]
+    assert (
+        "**Ložnice**: Ložnice topeni, Ložnice okno"
+        in form["description_placeholders"]["rooms"]
+    )
     assert "Sklep" in form["description_placeholders"]["unassigned"]
 
     form = await flow.async_step_confirm_rooms({"use_detected_rooms": True})
@@ -558,7 +630,9 @@ async def test_flow_confirms_detected_rooms_and_only_asks_for_valves_without_an_
     assert _offered_valves(form) == [cellar]
     assert "Sklep" in form["description_placeholders"]["hint"]
 
-    result = await flow.async_step_rooms({"name": "Sklep", "valves": [cellar], "add_another": False})
+    result = await flow.async_step_rooms(
+        {"name": "Sklep", "valves": [cellar], "add_another": False}
+    )
     assert result["type"].value == "create_entry"
     assert [(r["name"], r["valves"]) for r in result["data"]["rooms"]] == [
         ("Ložnice", [heating, window]),
@@ -569,7 +643,9 @@ async def test_flow_confirms_detected_rooms_and_only_asks_for_valves_without_an_
     flow = _room_flow(hass, [heating, cellar])
     await flow._start_rooms()
     await flow.async_step_confirm_rooms({"use_detected_rooms": True})
-    form = await flow.async_step_rooms({"name": "Ložnice", "valves": [cellar], "add_another": False})
+    form = await flow.async_step_rooms(
+        {"name": "Ložnice", "valves": [cellar], "add_another": False}
+    )
     assert form["errors"] == {"base": "room_duplicate"}
 
 
@@ -646,6 +722,7 @@ def test_entities_share_the_automated_boiler_device():
 
 # --- restart / reload behaviour -------------------------------------------------------------
 
+
 def _restart_entry():
     return MockConfigEntry(
         domain=DOMAIN,
@@ -667,7 +744,9 @@ def _heating_valve(hass):
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
-async def test_restart_with_running_relay_and_missing_valves_does_not_switch_it_off(hass):
+async def test_restart_with_running_relay_and_missing_valves_does_not_switch_it_off(
+    hass,
+):
     off_calls = async_mock_service(hass, "switch", "turn_off")
     on_calls = async_mock_service(hass, "switch", "turn_on")
     hass.states.async_set("switch.boiler", "on")  # valves have not loaded yet
@@ -705,7 +784,9 @@ async def test_heat_is_allowed_immediately_once_valves_appear_after_a_restart(ha
 async def test_genuinely_unavailable_valves_still_follow_the_failsafe(hass):
     off_calls = async_mock_service(hass, "switch", "turn_off")
     hass.states.async_set("switch.boiler", "on")
-    hass.states.async_set("climate.living_room", "unavailable")  # exists, but really offline
+    hass.states.async_set(
+        "climate.living_room", "unavailable"
+    )  # exists, but really offline
     controller = BoilerController(hass, _restart_entry())
 
     await controller.async_evaluate()
