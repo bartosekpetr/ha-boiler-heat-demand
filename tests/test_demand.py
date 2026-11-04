@@ -193,6 +193,20 @@ def test_manual_override_bypasses_lockouts():
     assert not decide(["a"], 1, True, 10, 300, 300, manual_override=False).boiler_on
 
 
+def test_force_on_overrides_manual_off():
+    decision = decide([], 1, False, 10, 300, 300, force_on=True, manual_override=False)
+    assert decision.boiler_on
+
+
+def test_manual_off_still_works_without_force_on():
+    decision = decide([], 1, True, 10, 300, 300, force_on=False, manual_override=False)
+    assert not decision.boiler_on
+
+
+def test_manual_on_unchanged_with_force_on():
+    assert decide([], 1, False, 10, 300, 300, force_on=True, manual_override=True).boiler_on
+
+
 def test_manual_override_does_not_change_calculated_demand():
     decision = decide([], 1, False, None, 0, 0, manual_override=True)
     assert not decision.demand and decision.boiler_on

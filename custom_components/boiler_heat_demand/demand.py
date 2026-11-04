@@ -292,12 +292,16 @@ def decide(
 
     seconds_since_change is None when the relay has not changed state yet
     (no lockout applies). `demand` overrides the valve-count rule. `force_on`
-    (low-temperature safety) bypasses the minimum off time.
+    (low-temperature safety) bypasses the minimum off time and
+    overrides a manual OFF.
     """
     if demand is None:
         demand = len(calling) >= min_valves
     demand = demand or force_on
     target = demand if manual_override is None else manual_override
+    if force_on:
+        # Frost protection wins over a manual OFF override.
+        target = True
     if (
         manual_override is None
         and target != boiler_is_on
