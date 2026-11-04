@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import sys
 from types import SimpleNamespace
@@ -641,3 +642,143 @@ def test_entities_share_the_automated_boiler_device():
     assert maximum_pid.native_value == 40
     assert cumulative_pid.native_value == 90
     assert cumulative_delta.native_value == 2.5
+
+
+# --- restart / reload behaviour -------------------------------------------------------------
+
+def _restart_entry():
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "relay_entity": "switch.boiler",
+            "valve_entities": ["climate.living_room"],
+            "learning_enabled": False,
+            "valve_timeout_minutes": 0,
+        },
+    )
+
+
+def _heating_valve(hass):
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"hvac_action": "heating", "current_temperature": 19, "temperature": 21},
+    )
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_restart_with_running_relay_and_missing_valves_does_not_switch_it_off(hass):
+    off_calls = async_mock_service(hass, "switch", "turn_off")
+    on_calls = async_mock_service(hass, "switch", "turn_on")
+    hass.states.async_set("switch.boiler", "on")  # valves have not loaded yet
+    controller = BoilerController(hass, _restart_entry())
+
+    await controller.async_evaluate()
+
+    assert off_calls == []
+    assert controller._last_change is None  # no min_off lockout was armed
+
+    # The valves appear and still want heat: the relay simply stays on.
+    _heating_valve(hass)
+    await controller.async_evaluate()
+    assert off_calls == []
+    assert on_calls == []
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_heat_is_allowed_immediately_once_valves_appear_after_a_restart(hass):
+    off_calls = async_mock_service(hass, "switch", "turn_off")
+    on_calls = async_mock_service(hass, "switch", "turn_on")
+    hass.states.async_set("switch.boiler", "off")
+    controller = BoilerController(hass, _restart_entry())
+
+    await controller.async_evaluate()
+    assert on_calls == [] and off_calls == []
+
+    _heating_valve(hass)
+    await controller.async_evaluate()
+
+    assert [c.data["entity_id"] for c in on_calls] == ["switch.boiler"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_genuinely_unavailable_valves_still_follow_the_failsafe(hass):
+    off_calls = async_mock_service(hass, "switch", "turn_off")
+    hass.states.async_set("switch.boiler", "on")
+    hass.states.async_set("climate.living_room", "unavailable")  # exists, but really offline
+    controller = BoilerController(hass, _restart_entry())
+
+    await controller.async_evaluate()
+
+    assert [c.data["entity_id"] for c in off_calls] == ["switch.boiler"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_first_evaluation_waits_until_home_assistant_has_started(hass):
+    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+    from homeassistant.core import CoreState
+
+    hass.set_state(CoreState.starting)
+    entry = _restart_entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("switch.boiler", "off")
+    controller = BoilerController(hass, entry)
+    controller.async_evaluate = AsyncMock()
+
+    controller.start()
+    await hass.async_block_till_done()
+    controller.async_evaluate.assert_not_called()
+
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    controller.async_evaluate.assert_awaited_once()
+    controller.stop()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_reload_while_running_evaluates_straight_away(hass):
+    entry = _restart_entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("switch.boiler", "off")
+    controller = BoilerController(hass, entry)
+    controller.async_evaluate = AsyncMock()
+
+    controller.start()
+    await hass.async_block_till_done()
+
+    controller.async_evaluate.assert_awaited_once()
+    controller.stop()
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_evaluations_never_overlap(hass):
+    hass.states.async_set("switch.boiler", "off")
+    controller = BoilerController(hass, _restart_entry())
+    running = peak = 0
+
+    async def slow_evaluate():
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        running -= 1
+
+    controller._async_evaluate = slow_evaluate
+    await asyncio.gather(*(controller.async_evaluate() for _ in range(5)))
+
+    assert peak == 1
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_no_evaluation_commands_the_relay_after_stop(hass):
+    on_calls = async_mock_service(hass, "switch", "turn_on")
+    hass.states.async_set("switch.boiler", "off")
+    _heating_valve(hass)
+    controller = BoilerController(hass, _restart_entry())
+
+    controller.stop()
+    await controller.async_evaluate()
+
+    assert on_calls == []

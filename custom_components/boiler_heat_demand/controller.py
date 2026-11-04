@@ -1,6 +1,7 @@
 """Evaluates valve demand and drives the boiler relay."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -8,9 +9,10 @@ from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import CoreState, Event, HomeAssistant, callback
 from homeassistant.components import persistent_notification
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -110,6 +112,9 @@ class BoilerController:
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.learning")
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[Callable[[], None]] = []
+        # Evaluations run one at a time and never after stop(), so none can command the relay late.
+        self._eval_lock = asyncio.Lock()
+        self._stopped = False
 
     async def async_load(self) -> None:
         data = await self._store.async_load()
@@ -204,16 +209,31 @@ class BoilerController:
         self._unsubs.append(
             async_track_time_interval(self.hass, self._on_timer, timedelta(seconds=30))
         )
-        self.hass.async_create_task(self.async_evaluate())
+        # At boot the valves' states may not exist yet; wait until Home Assistant has started.
+        if self.hass.state is CoreState.running:
+            self._spawn_evaluation()
+        else:
+            self._unsubs.append(async_at_started(self.hass, self._on_started))
 
     def stop(self) -> None:
+        self._stopped = True
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
 
+    def _spawn_evaluation(self) -> None:
+        """Evaluate in a task tied to the config entry, so it is cancelled on unload."""
+        self.entry.async_create_background_task(
+            self.hass, self.async_evaluate(), f"{DOMAIN} evaluation"
+        )
+
+    @callback
+    def _on_started(self, _hass: HomeAssistant) -> None:
+        self._spawn_evaluation()
+
     @callback
     def _on_change(self, event: Event) -> None:
-        self.hass.async_create_task(self.async_evaluate())
+        self._spawn_evaluation()
 
     async def _on_timer(self, _now) -> None:
         await self.async_evaluate()
@@ -268,6 +288,12 @@ class BoilerController:
 
     async def async_evaluate(self) -> None:
         """Run one control cycle; a failure raises a critical alert instead of silently stalling."""
+        async with self._eval_lock:
+            if self._stopped:
+                return
+            await self._guarded_evaluate()
+
+    async def _guarded_evaluate(self) -> None:
         try:
             await self._async_evaluate()
         except Exception as err:  # noqa: BLE001 - the relay must never be left unmanaged silently
@@ -284,6 +310,11 @@ class BoilerController:
         self._expire_manual_override()
         cfg = self._cfg
         relay = cfg[CONF_RELAY]
+        if all(self.hass.states.get(v) is None for v in cfg[CONF_VALVES]):
+            # No valve state exists at all: they have not loaded yet (e.g. right after a restart).
+            # That is not "no demand", so leave the relay alone and do not arm any lockout.
+            _LOGGER.debug("No valve state available yet, not switching %s", relay)
+            return
         hysteresis = float(cfg.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS))
         timeout_seconds = float(cfg.get(CONF_VALVE_TIMEOUT, DEFAULT_VALVE_TIMEOUT)) * 60
         sensor_timeout = sensor_timeout_seconds(timeout_seconds)
@@ -455,6 +486,8 @@ class BoilerController:
         )
 
     async def _command(self, relay: str, on: bool) -> None:
+        if self._stopped:
+            return
         try:
             await self.hass.services.async_call(
                 "switch" if relay.startswith("switch.") else "homeassistant",
