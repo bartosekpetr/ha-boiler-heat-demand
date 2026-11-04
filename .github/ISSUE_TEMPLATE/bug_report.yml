@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in Boiler Heat Demand does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security problems do not belong here**, use the private route in [SECURITY.md](https://github.com/bartosekpetr/ha-boiler-heat-demand/blob/main/SECURITY.md).
+        Please remove passwords, tokens, IP addresses and anything else private from logs before pasting.
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Settings → About
+      placeholder: "2025.1.0"
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      description: HACS → the integration, or `version` in `manifest.json`
+      placeholder: "0.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Installation method
+      options: [HACS, Manual copy, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. ...\n2. ..."
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: Settings → System → Logs → Download full log, then paste the lines mentioning the integration domain. Debug logging helps if you can enable it.
+      render: text
+    validations:
+      required: true
