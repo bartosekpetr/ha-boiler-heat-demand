@@ -1,0 +1,33 @@
+# Shared ruff config - keep identical in HomelYnk-HA and ha-boiler-heat-demand.
+target-version = "py313"
+line-length = 88
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "BLE", # blind except (deliberate cases carry a noqa)
+    "ASYNC", # blocking calls in async code
+    "RUF", # ruff-specific
+]
+ignore = [
+    # The formatter owns line length; long comments/docstrings/strings are left as-is.
+    "E501",
+    # Keep deliberate "noqa: BLE001" markers even where ruff would not flag the line.
+    "RUF100",
+    # Boolean positional args are idiomatic in HA and mirror HA core's own config.
+    "FBT001",
+    "FBT002",
+    "FBT003",
+]
+
+[lint.isort]
+known-first-party = ["custom_components"]
+
+[lint.per-file-ignores]
+# Test-only style nits: short lambda names, scratch locals, list concatenation.
+"tests/**" = ["E741", "F841", "RUF005"]
