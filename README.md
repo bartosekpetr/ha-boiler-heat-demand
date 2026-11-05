@@ -53,6 +53,67 @@ Use the button above, or open the Marketplace in Home Assistant, add this reposi
 
 HACS -> Custom repositories -> add this repo (Integration) -> install -> restart -> Add integration **Boiler Heat Demand**.
 
+## Dashboard card
+
+The integration ships its own Lovelace card, so there is nothing extra to install through HACS. **Restart Home Assistant after installing or updating** – the card then appears in the dashboard card picker as *Boiler Heat Demand* and can be configured from the UI, no YAML needed.
+
+It shows whether the boiler is calling for heat, any active alerts (stuck relay, failed service call) and the low-temperature safety state, plus a three-way **Auto / On / Off** control that presses the existing *Resume automatic control*, *Boiler on* and *Boiler off* buttons. An active manual override shows its remaining time, or "until you resume" when the manual timeout is 0.
+
+```yaml
+type: custom:boiler-heat-demand-card
+entity: binary_sensor.automated_boiler_heat_demand   # required: the "Heat demand" sensor
+name: Boiler                                         # optional title
+# Optional overrides; by default these are found on the same device as `entity`:
+# auto_button: button.automated_boiler_resume_automatic_control
+# on_button: button.automated_boiler_boiler_on
+# off_button: button.automated_boiler_boiler_off
+# calling_entity: sensor.automated_boiler_rooms_calling_for_heat
+# pid_entity: sensor.automated_boiler_maximum_pid_demand
+```
+
+Controls whose entity cannot be found (renamed, disabled) are hidden; the rest of the card keeps working.
+
+### Without a custom card
+
+If you would rather not load a custom module, the same information is available with built-in cards. Replace the entity ids with yours:
+
+```yaml
+type: vertical-stack
+cards:
+  - type: conditional          # shown only while there is an alert
+    conditions:
+      - condition: state
+        entity: binary_sensor.automated_boiler_heat_demand
+        attribute: alerts
+        state_not: []
+    card:
+      type: markdown
+      content: >-
+        **Boiler alert:**
+        {{ state_attr('binary_sensor.automated_boiler_heat_demand', 'alerts') | join(', ') }}
+  - type: tile
+    entity: binary_sensor.automated_boiler_heat_demand
+    name: Heat demand
+  - type: entities
+    entities:
+      - sensor.automated_boiler_rooms_calling_for_heat
+      - sensor.automated_boiler_maximum_pid_demand
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Auto
+        entity: button.automated_boiler_resume_automatic_control
+        tap_action: {action: toggle}
+      - type: button
+        name: On
+        entity: button.automated_boiler_boiler_on
+        tap_action: {action: toggle}
+      - type: button
+        name: Off
+        entity: button.automated_boiler_boiler_off
+        tap_action: {action: toggle}
+```
+
 ## Options
 
 | Option | Default |

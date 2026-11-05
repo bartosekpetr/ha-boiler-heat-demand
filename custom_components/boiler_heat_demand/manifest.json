@@ -4,6 +4,7 @@
   "categories": ["climate.thermostats_heating"],
   "codeowners": ["@bartosekpetr"],
   "config_flow": true,
+  "dependencies": ["http", "frontend"],
   "documentation": "https://github.com/bartosekpetr/ha-boiler-heat-demand",
   "integration_type": "service",
   "iot_class": "calculated",

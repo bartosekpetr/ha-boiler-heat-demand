@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.typing import ConfigType
 
 from .const import CONF_RELAY, DOMAIN, PLATFORMS
 from .controller import BoilerController
 
 _LOGGER = logging.getLogger(__name__)
+
+CARD_FILE = Path(__file__).parent / "frontend" / "boiler-heat-demand-card.js"
+CARD_URL = f"/{DOMAIN}/boiler-heat-demand-card.js"
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -23,6 +30,19 @@ def device_info(entry: ConfigEntry) -> DeviceInfo:
         manufacturer="bartosekpetr",
         model="Boiler Heat Demand",
     )
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Serve the dashboard card once per Home Assistant start.
+
+    Registering a static path twice raises, so this must not live in
+    async_setup_entry, which runs again on every config entry reload.
+    """
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(CARD_URL, str(CARD_FILE), cache_headers=False)]
+    )
+    add_extra_js_url(hass, CARD_URL)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
