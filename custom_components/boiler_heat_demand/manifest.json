@@ -1,6 +1,7 @@
 {
   "domain": "boiler_heat_demand",
   "name": "Boiler Heat Demand",
+  "categories": ["climate.thermostats_heating"],
   "codeowners": ["@bartosekpetr"],
   "config_flow": true,
   "documentation": "https://github.com/bartosekpetr/ha-boiler-heat-demand",
