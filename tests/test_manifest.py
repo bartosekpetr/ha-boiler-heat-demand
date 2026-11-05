@@ -13,8 +13,9 @@ MANIFEST = (
 def test_manifest_version_is_semver():
     """X.Y.Z, optionally with a -beta.N / -alpha.N / -rc.N prerelease suffix.
 
-    This repository releases prereleases, so the manifest version has to be
-    able to carry the same suffix as the tag it ships under.
+    The manifest version must equal the tag it ships under, and this
+    repository ships both stable releases and prereleases, so the suffix is
+    optional rather than required.
     """
     version = json.loads(MANIFEST.read_text(encoding="utf-8"))["version"]
     assert re.fullmatch(r"\d+\.\d+\.\d+(-(?:alpha|beta|rc)\.\d+)?", version), (
