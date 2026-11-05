@@ -1,6 +1,6 @@
 # Boiler Heat Demand
 
-Home Assistant custom integration (HACS) that switches a **gas boiler relay** based on **heat demand from thermostatic radiator valves** (any `climate` entities).
+Home Assistant custom integration that switches a **gas boiler relay** based on **heat demand from thermostatic radiator valves** (any `climate` entities).
 
 > Unofficial, not affiliated with any boiler or valve vendor. The relay only requests heat; keep the boiler's own safety controls in place.
 
@@ -43,7 +43,15 @@ Each room is modelled separately from its room temperature (sensor or valve medi
 
 ## Install
 
-HACS â†’ Custom repositories â†’ add this repo (Integration) â†’ install â†’ restart â†’ Add integration **Boiler Heat Demand**.
+**Home Assistant 2026.11 or newer (Marketplace):**
+
+[![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=bartosekpetr&repository=ha-boiler-heat-demand&category=integration)
+
+Use the button above, or open the Marketplace in Home Assistant, add this repository (`bartosekpetr/ha-boiler-heat-demand`, category Integration), install it and restart. Then add the integration **Boiler Heat Demand**.
+
+**Older Home Assistant (HACS):**
+
+HACS -> Custom repositories -> add this repo (Integration) -> install -> restart -> Add integration **Boiler Heat Demand**.
 
 ## Options
 
