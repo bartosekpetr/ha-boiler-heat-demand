@@ -6,16 +6,16 @@ Home Assistant custom integration that switches a **gas boiler relay** based on 
 
 ## How it works
 
-1. **Select valve devices; rooms are detected for you** â€“ pick the thermostatic valve devices; the `climate` entity of each device is used (climate entities without a device can be added separately). Rooms come from the **areas** your valves already have in Home Assistant (the entity's own area, otherwise its device's area). Setup shows the detected rooms and you only confirm them; you are asked to assign a room only for valves that have no area (or you can decline the detection and group valves by hand, optionally with a room temperature sensor). Valves left unassigned are each their own room. Everything below works per **room**.
-2. **Room state** â€“ temperature is the room sensor if set, otherwise the median of its valves (one radiator-warmed valve can't skew it). The room target is the highest setpoint among its active valves. A room whose valves are all `off` never counts; if only some valves fail, the room keeps working from the others.
-3. **Is a room requesting heat?** â€“ any of its valves has `hvac_action == heating`; valves without an action use the room temperature vs target with hysteresis.
+1. **Select valve devices; rooms are detected for you** – pick the thermostatic valve devices; the `climate` entity of each device is used (climate entities without a device can be added separately). Rooms come from the **areas** your valves already have in Home Assistant (the entity's own area, otherwise its device's area). Setup shows the detected rooms and you only confirm them; you are asked to assign a room only for valves that have no area (or you can decline the detection and group valves by hand, optionally with a room temperature sensor). Valves left unassigned are each their own room. Everything below works per **room**.
+2. **Room state** – temperature is the room sensor if set, otherwise the median of its valves (one radiator-warmed valve can't skew it). The room target is the highest setpoint among its active valves. A room whose valves are all `off` never counts; if only some valves fail, the room keeps working from the others.
+3. **Is a room requesting heat?** – any of its valves has `hvac_action == heating`; valves without an action use the room temperature vs target with hysteresis.
 4. **Demand mode** (configurable):
    - *PID heating demand* - start when the highest active valve PID demand reaches the configured start percentage; keep heating until it falls to the stop percentage. The configured climate attribute must report a numeric value from 0 to 100. If no active valve provides a valid value, the integration falls back to valve-count demand.
-   - *Valve count* â€“ start when at least *N* rooms call for heat.
-   - *Temperature deficit* â€“ start when the largest room `target â’ current` reaches **start deficit**; keep heating until it falls to **stop deficit**. The gap between the two thresholds prevents on/off flapping.
-5. **Anti-short-cycling** â€“ minimum on and off times. Recommended: min on/off 5â€“10 min, start deficit â‰ 0.5 Â°C, stop deficit â‰ 0.1 Â°C.
-6. **Low-temperature safety** â€“ if any active room is at or below the safety temperature (default 8 Â°C, 0 disables), the boiler is turned on even during the minimum off time. The room temperature comes from the room sensor when it is valid and fresh, otherwise from the valves. A room whose valves are all unresponsive is still protected when it has a valid room sensor. Rooms whose valves are switched `off` are not heated, so they do not trigger the safety.
-7. **Output** â€“ a generic `switch` / `input_boolean` relay.
+   - *Valve count* – start when at least *N* rooms call for heat.
+   - *Temperature deficit* – start when the largest room `target − current` reaches **start deficit**; keep heating until it falls to **stop deficit**. The gap between the two thresholds prevents on/off flapping.
+5. **Anti-short-cycling** – minimum on and off times. Recommended: min on/off 5–10 min, start deficit ≈ 0.5 °C, stop deficit ≈ 0.1 °C.
+6. **Low-temperature safety** – if any active room is at or below the safety temperature (default 8 °C, 0 disables), the boiler is turned on even during the minimum off time. The room temperature comes from the room sensor when it is valid and fresh, otherwise from the valves. A room whose valves are all unresponsive is still protected when it has a valid room sensor. Rooms whose valves are switched `off` are not heated, so they do not trigger the safety.
+7. **Output** – a generic `switch` / `input_boolean` relay.
 
 ### Unresponsive valves
 A valve that is `unavailable`, `unknown` or has not reported within the timeout (default 30 min, 0 disables) is ignored while other valves in its room respond. When **all** valves of a room are unresponsive, the room follows the **If a valve does not respond** setting: *ignore* (default), *assume it calls for heat*, or *keep its last known demand*.
@@ -34,12 +34,12 @@ Manual boiler buttons hold the selected state until *Resume automatic control* i
 
 ### Self-learning
 Each room is modelled separately from its room temperature (sensor or valve median), no extra hardware needed:
-- **Heating rate** (Â°C/h with the boiler on), **cooling rate** (boiler off; per Â°C above outdoor if an outdoor sensor is set), **lag** (minutes until the room starts rising) and **coast rise** (how far it keeps rising after heating stops, e.g. warm radiators).
-- **Early stop:** heating stops when `current + coast rise â‰Ą target`, which reduces overshoot.
-- **Pre-start:** heating starts when the temperature predicted after the lag would fall below `target â’ start threshold`.
-- **Self-tuning:** after each cycle the start threshold and stop point are nudged by 0.1 Â°C if the room overshot or undershot. Values are clamped, and the start threshold always stays above the stop point to prevent flapping.
+- **Heating rate** (°C/h with the boiler on), **cooling rate** (boiler off; per °C above outdoor if an outdoor sensor is set), **lag** (minutes until the room starts rising) and **coast rise** (how far it keeps rising after heating stops, e.g. warm radiators).
+- **Early stop:** heating stops when `current + coast rise ≥ target`, which reduces overshoot.
+- **Pre-start:** heating starts when the temperature predicted after the lag would fall below `target − start threshold`.
+- **Self-tuning:** after each cycle the start threshold and stop point are nudged by 0.1 °C if the room overshot or undershot. Values are clamped, and the start threshold always stays above the stop point to prevent flapping.
 - A room is used only after **3 complete heating cycles**; before that the fixed rules apply. Minimum on/off times and the low-temperature safety always take precedence.
-- Models are stored across restarts. Use *Reset learning* after big changes (new radiator, insulation). Learning can be disabled in the options. It only learns from the room's own readings, so rooms with coarse sensors (0.5 Â°C steps) learn more slowly.
+- Models are stored across restarts. Use *Reset learning* after big changes (new radiator, insulation). Learning can be disabled in the options. It only learns from the room's own readings, so rooms with coarse sensors (0.5 °C steps) learn more slowly.
 
 ## Install
 
@@ -61,11 +61,11 @@ HACS -> Custom repositories -> add this repo (Integration) -> install -> restart
 | PID demand source | Detected automatically per valve device |
 | PID start / stop demand (PID mode) | 20 / 5 % |
 | Rooms required to start | 1 |
-| Start / stop deficit (deficit mode) | 0.5 / 0.1 Â°C |
+| Start / stop deficit (deficit mode) | 0.5 / 0.1 °C |
 | Minimum on time | 5 min |
 | Minimum off time | 5 min |
-| Hysteresis (fallback only) | 0.3 Â°C |
-| Low-temperature safety | 8 Â°C (0 disables) |
+| Hysteresis (fallback only) | 0.3 °C |
+| Low-temperature safety | 8 °C (0 disables) |
 | Valve report timeout | 30 min (0 disables) |
 | If a valve does not respond | Ignore |
 | Manual boiler on/off expires after | 120 min (0 = never) |
