@@ -291,7 +291,7 @@ class BoilerHeatDemandCard extends HTMLElement {
       this._safety.append(el("strong", "", "Low-temperature safety active"));
       this._safety.append(
         el("div", "", override === "off"
-          ? " A room is at or below its safety temperature, but the boiler is manually OFF, so it is not heating. Press Auto to let frost protection act."
+          ? " A room is at or below its safety temperature, so frost protection is overriding your manual OFF and the boiler is being kept heating."
           : " A room is at or below its safety temperature, so the boiler is being kept heating.")
       );
     }
