@@ -82,15 +82,18 @@ type: vertical-stack
 cards:
   - type: conditional          # shown only while there is an alert
     conditions:
+      # Lovelace compares an attribute as text, and an empty alert list
+      # becomes an empty string - so this hides the card when there is
+      # nothing to report, and when the sensor is not available.
       - condition: state
         entity: binary_sensor.automated_boiler_heat_demand
         attribute: alerts
-        state_not: []
+        state_not: ["", "unknown", "unavailable"]
     card:
       type: markdown
       content: >-
         **Boiler alert:**
-        {{ state_attr('binary_sensor.automated_boiler_heat_demand', 'alerts') | join(', ') }}
+        {{ state_attr('binary_sensor.automated_boiler_heat_demand', 'alerts') | default([], true) | join(', ') }}
   - type: tile
     entity: binary_sensor.automated_boiler_heat_demand
     name: Heat demand
