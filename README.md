@@ -75,7 +75,7 @@ Controls whose entity cannot be found (renamed, disabled) are hidden; the rest o
 
 ### Instant dashboard
 
-The same file also provides a dashboard strategy that builds a boiler dashboard for you, finding your boiler through the Home Assistant registries, so no entity ids need typing. Each boiler gets the card, a text banner for alerts and the low-temperature safety state (it stays readable even if the card fails to load) and a list of the supporting entities.
+The same file also provides a dashboard strategy that builds a boiler dashboard for you, finding your boiler through the Home Assistant registries, so no entity ids need typing. Each boiler gets the card, a text banner for alerts and the low-temperature safety state (it stays readable even if the card fails to load), a list of the supporting entities, and a *Maintenance* section holding **Reset learning** behind a confirmation dialog.
 
 It does **not** appear in the *Add dashboard* picker. Home Assistant has no registry through which a custom strategy can advertise itself there, so you paste two lines of YAML once:
 
@@ -88,15 +88,7 @@ strategy:
   type: custom:boiler-heat-demand
 ```
 
-To add a boiler view to a dashboard you already have, put this in that dashboard's raw configuration under `views:`:
-
-```yaml
-views:
-  - strategy:
-      type: custom:boiler-heat-demand
-```
-
-With several boilers the dashboard form gives each its own view; the view form puts them all in one view. With none configured it shows a note instead of an error. Like the card, it needs a Home Assistant restart after installing or updating.
+With several boilers each gets its own view. With none configured it shows a note instead of an error. Like the card, it needs a Home Assistant restart after installing or updating.
 
 ### If the card does not load
 
@@ -105,6 +97,8 @@ With several boilers the dashboard form gives each its own view; the view form p
 - The Home Assistant log has an `Dashboard card registered as /boiler_heat_demand/boiler-heat-demand-card.js?v=…` line at start-up. If it is missing, look for a *Boiler dashboard card file is missing* repair under Settings → Repairs: reinstall or update the integration and restart. Boiler control keeps working in that case.
 - Home Assistant was **restarted** after installing or updating. A reload does not register the card.
 - Reload the browser tab without cache (or clear the app cache in the companion app). The frontend page that lists the card files is cached by the browser, and the integration cannot refresh a page the browser has already stored.
+
+To check which copy the browser actually loaded, look for `boiler-heat-demand-card.js?v=…` in the browser's network tab: the `v` is the installed integration version, so an older number there means the browser is still using a cached file.
 
 ### Without a custom card
 

@@ -1,10 +1,10 @@
 /*
- * Boiler Heat Demand card and dashboard strategies - served by the
+ * Boiler Heat Demand card and dashboard strategy - served by the
  * boiler_heat_demand integration.
  * Plain web components (shadow DOM), no build step, no dependencies.
  * Colours come only from Home Assistant theme CSS variables.
  */
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.1.0";
 
 // Sibling entities of the "Heat demand" binary sensor, found on the same
 // device. The integration sets only `_attr_name`, so the entity_id ends with
@@ -21,6 +21,7 @@ const SIBLINGS = {
   off_button: { domain: "button", slug: "boiler_off", name: "Boiler off" },
   calling_entity: { domain: "sensor", slug: "rooms_calling_for_heat", name: "Rooms calling for heat" },
   pid_entity: { domain: "sensor", slug: "maximum_pid_demand", name: "Maximum PID demand" },
+  reset_button: { domain: "button", slug: "reset_learning", name: "Reset learning" },
 };
 
 const OVERRIDE_KEYS = ["auto_button", "on_button", "off_button", "calling_entity", "pid_entity"];
@@ -28,7 +29,7 @@ const OVERRIDE_KEYS = ["auto_button", "on_button", "off_button", "calling_entity
 const DOMAIN = "boiler_heat_demand";
 
 // Entity ids of one boiler device, found through the registries. `overrides`
-// (the card config) win over the lookup. Shared by the card and the strategies
+// (the card config) win over the lookup. Shared by the card and the dashboard
 // so both resolve entities the same way.
 function resolveSiblings(hass, deviceId, keys, overrides) {
   const ids = {};
@@ -458,7 +459,7 @@ class BoilerHeatDemandCardEditor extends HTMLElement {
   }
 }
 
-// ---- Dashboard strategies -------------------------------------------------
+// ---- Dashboard strategy ---------------------------------------------------
 // Used as `strategy: {type: custom:boiler-heat-demand}`. generate() only reads
 // the `hass` object it is given: Home Assistant gives a strategy 5 seconds to
 // register and nothing here may wait for the network.
@@ -506,6 +507,32 @@ function boilerCards(hass, boiler, heading) {
     if (id && states[id]) rows.push({ entity: id });
   }
   cards.push({ type: "entities", title: "Details", show_header_toggle: false, entities: rows });
+
+  // "Reset learning" is destructive and kept out of Details on purpose: it sits
+  // in its own section behind a confirmation dialog. `hui-button-entity-row`
+  // ignores tap_action but honours `confirmation` and `action_name` directly.
+  const resetId = boiler.ids.reset_button;
+  if (resetId && states[resetId]) {
+    cards.push({
+      type: "entities",
+      title: "Maintenance",
+      show_header_toggle: false,
+      entities: [
+        {
+          entity: resetId,
+          name: "Reset learning",
+          action_name: "Reset",
+          confirmation: {
+            title: "Reset learned boiler data?",
+            text:
+              "This erases every room's learned heating behaviour. Heating keeps working, " +
+              "but each room has to be learned again over several heating cycles.",
+            confirm_text: "Reset",
+          },
+        },
+      ],
+    });
+  }
   return cards;
 }
 
@@ -524,17 +551,6 @@ function failedCards(err) {
 }
 
 // Never throws: a strategy that throws shows the user a raw error.
-function buildCards(hass) {
-  try {
-    const boilers = findBoilers(hass);
-    if (!boilers.length) return { boilers, cards: noBoilerCards() };
-    const many = boilers.length > 1;
-    return { boilers, cards: boilers.flatMap((b) => boilerCards(hass, b, many ? b.name : undefined)) };
-  } catch (err) {
-    return { boilers: [], cards: failedCards(err) };
-  }
-}
-
 class BoilerHeatDemandDashboardStrategy extends HTMLElement {
   static async generate(config, hass) {
     // One view per boiler device, so each gets its own tab.
@@ -558,20 +574,12 @@ class BoilerHeatDemandDashboardStrategy extends HTMLElement {
   }
 }
 
-class BoilerHeatDemandViewStrategy extends HTMLElement {
-  static async generate(config, hass) {
-    // A view strategy returns a single view, so several boilers share it.
-    return { cards: buildCards(hass).cards };
-  }
-}
-
 if (!customElements.get("boiler-heat-demand-card")) {
   customElements.define("boiler-heat-demand-card", BoilerHeatDemandCard);
   customElements.define("boiler-heat-demand-card-editor", BoilerHeatDemandCardEditor);
 }
 if (!customElements.get("ll-strategy-dashboard-boiler-heat-demand")) {
   customElements.define("ll-strategy-dashboard-boiler-heat-demand", BoilerHeatDemandDashboardStrategy);
-  customElements.define("ll-strategy-view-boiler-heat-demand", BoilerHeatDemandViewStrategy);
 }
 
 window.customCards = window.customCards || [];
