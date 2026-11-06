@@ -10,6 +10,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.typing import ConfigType
 
@@ -20,6 +21,11 @@ _LOGGER = logging.getLogger(__name__)
 
 CARD_FILE = Path(__file__).parent / "frontend" / "boiler-heat-demand-card.js"
 CARD_URL = f"/{DOMAIN}/boiler-heat-demand-card.js"
+
+# This integration is configured from the UI only. async_setup exists purely to
+# serve the dashboard card, so hassfest requires the matching schema; without it
+# a `boiler_heat_demand:` block in configuration.yaml would be silently accepted.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
