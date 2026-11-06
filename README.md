@@ -73,6 +73,39 @@ name: Boiler                                         # optional title
 
 Controls whose entity cannot be found (renamed, disabled) are hidden; the rest of the card keeps working.
 
+### Instant dashboard
+
+The same file also provides a dashboard strategy that builds a boiler dashboard for you, finding your boiler through the Home Assistant registries, so no entity ids need typing. Each boiler gets the card, a text banner for alerts and the low-temperature safety state (it stays readable even if the card fails to load) and a list of the supporting entities.
+
+It does **not** appear in the *Add dashboard* picker. Home Assistant has no registry through which a custom strategy can advertise itself there, so you paste two lines of YAML once:
+
+1. Settings → Dashboards → Add dashboard → pick *New dashboard from scratch* and create it.
+2. Open the new dashboard, then three-dot menu → Edit dashboard → three-dot menu → Raw configuration editor.
+3. Replace the contents with:
+
+```yaml
+strategy:
+  type: custom:boiler-heat-demand
+```
+
+To add a boiler view to a dashboard you already have, put this in that dashboard's raw configuration under `views:`:
+
+```yaml
+views:
+  - strategy:
+      type: custom:boiler-heat-demand
+```
+
+With several boilers the dashboard form gives each its own view; the view form puts them all in one view. With none configured it shows a note instead of an error. Like the card, it needs a Home Assistant restart after installing or updating.
+
+### If the card does not load
+
+`Custom element doesn't exist: boiler-heat-demand-card` means the browser did not load the card file. Check, in order:
+
+- The Home Assistant log has an `Dashboard card registered as /boiler_heat_demand/boiler-heat-demand-card.js?v=…` line at start-up. If it is missing, look for a *Boiler dashboard card file is missing* repair under Settings → Repairs: reinstall or update the integration and restart. Boiler control keeps working in that case.
+- Home Assistant was **restarted** after installing or updating. A reload does not register the card.
+- Reload the browser tab without cache (or clear the app cache in the companion app). The frontend page that lists the card files is cached by the browser, and the integration cannot refresh a page the browser has already stored.
+
 ### Without a custom card
 
 If you would rather not load a custom module, the same information is available with built-in cards. Replace the entity ids with yours:

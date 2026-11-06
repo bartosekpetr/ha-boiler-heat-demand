@@ -108,6 +108,10 @@
     }
   },
   "issues": {
+    "card_file_missing": {
+      "title": "Boiler dashboard card file is missing",
+      "description": "The integration's dashboard card file could not be found, so the Boiler Heat Demand card is unavailable. Boiler control is not affected. Reinstall or update the integration, then restart Home Assistant."
+    },
     "relay_unavailable": {
       "title": "Boiler relay unavailable",
       "description": "{relay} is unavailable and may be stuck ON. Check the boiler manually."

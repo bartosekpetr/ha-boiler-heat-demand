@@ -12,7 +12,13 @@ from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.loader import async_get_integration
 
 from .const import CONF_RELAY, DOMAIN, PLATFORMS
 from .controller import BoilerController
@@ -21,6 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CARD_FILE = Path(__file__).parent / "frontend" / "boiler-heat-demand-card.js"
 CARD_URL = f"/{DOMAIN}/boiler-heat-demand-card.js"
+ISSUE_CARD_MISSING = "card_file_missing"
 
 # This integration is configured from the UI only. async_setup exists purely to
 # serve the dashboard card, so hassfest requires the matching schema; without it
@@ -43,11 +50,40 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     Registering a static path twice raises, so this must not live in
     async_setup_entry, which runs again on every config entry reload.
+
+    A missing card file only costs the dashboard card: it raises a repair issue
+    and setup still succeeds, because the boiler control must keep running.
     """
+    if not await hass.async_add_executor_job(CARD_FILE.is_file):
+        _LOGGER.error(
+            "Dashboard card file %s is missing, so the card cannot be served. "
+            "Reinstall or update the integration and restart Home Assistant",
+            CARD_FILE,
+        )
+        async_create_issue(
+            hass,
+            DOMAIN,
+            ISSUE_CARD_MISSING,
+            is_fixable=False,
+            severity=IssueSeverity.WARNING,
+            translation_key=ISSUE_CARD_MISSING,
+        )
+        return True
+    async_delete_issue(hass, DOMAIN, ISSUE_CARD_MISSING)
+
     await hass.http.async_register_static_paths(
         [StaticPathConfig(CARD_URL, str(CARD_FILE), cache_headers=False)]
     )
-    add_extra_js_url(hass, CARD_URL)
+    # The static route stays at the bare URL; the stamp only changes the URL the
+    # frontend is told to load, so a new release is not mistaken for the old file.
+    integration = await async_get_integration(hass, DOMAIN)
+    url = f"{CARD_URL}?v={integration.version}" if integration.version else CARD_URL
+    add_extra_js_url(hass, url)
+    _LOGGER.info(
+        "Dashboard card registered as %s. Home Assistant must be restarted (a "
+        "reload is not enough) for browsers to pick up a new card",
+        url,
+    )
     return True
 
 

@@ -1,15 +1,21 @@
 /*
- * Boiler Heat Demand card - served by the boiler_heat_demand integration.
- * Plain web component (shadow DOM), no build step, no dependencies.
+ * Boiler Heat Demand card and dashboard strategies - served by the
+ * boiler_heat_demand integration.
+ * Plain web components (shadow DOM), no build step, no dependencies.
  * Colours come only from Home Assistant theme CSS variables.
  */
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.2.0";
 
 // Sibling entities of the "Heat demand" binary sensor, found on the same
 // device. The integration sets only `_attr_name`, so the entity_id ends with
 // the slugified name and the friendly name ends with the English name. A
 // per-entity config option always wins over this lookup.
 const SIBLINGS = {
+  demand_entity: { domain: "binary_sensor", slug: "heat_demand", name: "Heat demand" },
+  max_deficit_entity: { domain: "sensor", slug: "maximum_room_temperature_deficit", name: "Maximum room temperature deficit" },
+  cumulative_pid_entity: { domain: "sensor", slug: "cumulative_pid_demand", name: "Cumulative PID demand" },
+  cumulative_delta_entity: { domain: "sensor", slug: "cumulative_temperature_delta", name: "Cumulative temperature delta" },
+  learned_entity: { domain: "sensor", slug: "rooms_learned", name: "Rooms learned" },
   auto_button: { domain: "button", slug: "resume_automatic_control", name: "Resume automatic control" },
   on_button: { domain: "button", slug: "boiler_on", name: "Boiler on" },
   off_button: { domain: "button", slug: "boiler_off", name: "Boiler off" },
@@ -18,6 +24,73 @@ const SIBLINGS = {
 };
 
 const OVERRIDE_KEYS = ["auto_button", "on_button", "off_button", "calling_entity", "pid_entity"];
+
+const DOMAIN = "boiler_heat_demand";
+
+// Entity ids of one boiler device, found through the registries. `overrides`
+// (the card config) win over the lookup. Shared by the card and the strategies
+// so both resolve entities the same way.
+function resolveSiblings(hass, deviceId, keys, overrides) {
+  const ids = {};
+  const entities = (hass && hass.entities) || {};
+  for (const key of keys) {
+    if (overrides && overrides[key]) {
+      ids[key] = overrides[key];
+      continue;
+    }
+    if (!deviceId) continue;
+    const want = SIBLINGS[key];
+    const prefix = `${want.domain}.`;
+    const wantName = want.name.toLowerCase();
+    ids[key] = Object.keys(entities).find((id) => {
+      if (!id.startsWith(prefix) || entities[id].device_id !== deviceId) return false;
+      const slug = id.slice(prefix.length);
+      if (slug === want.slug || slug.endsWith(`_${want.slug}`)) return true;
+      const state = hass.states && hass.states[id];
+      const friendly = state && state.attributes && state.attributes.friendly_name;
+      return typeof friendly === "string" && friendly.toLowerCase().endsWith(wantName);
+    });
+  }
+  return ids;
+}
+
+// One entry per boiler device: { deviceId, name, ids }. Registry first (the
+// integration's own entities, grouped by device); the `calling_rooms`
+// attribute is a fallback for frontends whose registry omits the platform.
+function findBoilers(hass) {
+  const entities = (hass && hass.entities) || {};
+  const states = (hass && hass.states) || {};
+  const byDevice = new Map();
+  const consider = (id) => {
+    const deviceId = entities[id] && entities[id].device_id;
+    if (!id.startsWith("binary_sensor.") || !deviceId || byDevice.has(deviceId)) return;
+    byDevice.set(deviceId, id);
+  };
+  for (const id of Object.keys(entities)) if (entities[id].platform === DOMAIN) consider(id);
+  if (!byDevice.size) {
+    for (const id of Object.keys(states)) {
+      if (states[id].attributes && "calling_rooms" in states[id].attributes) consider(id);
+    }
+  }
+  const boilers = [];
+  for (const [deviceId, entity] of byDevice) {
+    const device = hass.devices && hass.devices[deviceId];
+    boilers.push({
+      deviceId,
+      entity,
+      name: (device && (device.name_by_user || device.name)) || "Boiler",
+      ids: resolveSiblings(hass, deviceId, Object.keys(SIBLINGS), {}),
+    });
+  }
+  // Two entries share the device name "Automated Boiler"; keep the views tellable apart.
+  const seen = {};
+  for (const b of boilers) seen[b.name] = (seen[b.name] || 0) + 1;
+  const index = {};
+  for (const b of boilers) {
+    if (seen[b.name] > 1) b.name = `${b.name} ${(index[b.name] = (index[b.name] || 0) + 1)}`;
+  }
+  return boilers;
+}
 
 const STYLE = `
   :host { display: block; }
@@ -130,29 +203,8 @@ class BoilerHeatDemandCard extends HTMLElement {
   _resolveIds() {
     const hass = this._hass;
     const cfg = this._config;
-    const ids = {};
-    const deviceId = hass && hass.entities && cfg.entity && hass.entities[cfg.entity]
-      ? hass.entities[cfg.entity].device_id
-      : undefined;
-    for (const key of OVERRIDE_KEYS) {
-      if (cfg[key]) {
-        ids[key] = cfg[key];
-        continue;
-      }
-      const want = SIBLINGS[key];
-      if (!deviceId || !hass.entities) continue;
-      const prefix = `${want.domain}.`;
-      const wantName = want.name.toLowerCase();
-      ids[key] = Object.keys(hass.entities).find((id) => {
-        if (!id.startsWith(prefix) || hass.entities[id].device_id !== deviceId) return false;
-        const slug = id.slice(prefix.length);
-        if (slug === want.slug || slug.endsWith(`_${want.slug}`)) return true;
-        const state = hass.states[id];
-        const friendly = state && state.attributes && state.attributes.friendly_name;
-        return typeof friendly === "string" && friendly.toLowerCase().endsWith(wantName);
-      });
-    }
-    return ids;
+    const entry = hass && hass.entities && cfg.entity ? hass.entities[cfg.entity] : undefined;
+    return resolveSiblings(hass, entry ? entry.device_id : undefined, OVERRIDE_KEYS, cfg);
   }
 
   _build() {
@@ -406,9 +458,120 @@ class BoilerHeatDemandCardEditor extends HTMLElement {
   }
 }
 
+// ---- Dashboard strategies -------------------------------------------------
+// Used as `strategy: {type: custom:boiler-heat-demand}`. generate() only reads
+// the `hass` object it is given: Home Assistant gives a strategy 5 seconds to
+// register and nothing here may wait for the network.
+
+const ENTITY_ID = /^[a-z0-9_]+\.[a-z0-9_]+$/;
+
+function statusTemplate(entity) {
+  // Plain markdown so alerts and the frost-protection override stay visible
+  // even if the custom card itself fails to load.
+  return [
+    `{% set e = '${entity}' %}`,
+    "{% if states(e) in ['unavailable', 'unknown', 'none'] %}",
+    "## ⚠️ Boiler status {{ states(e) }}",
+    "Alerts and the safety state cannot be read. Check the boiler manually.",
+    "{% else %}",
+    "{% set alerts = state_attr(e, 'alerts') or [] %}",
+    "{% if alerts %}## 🚨 Boiler alerts",
+    "{% for a in alerts %}- **{{ a | replace('_', ' ') | capitalize }}**",
+    "{% endfor %}{% else %}## ✅ No boiler alerts{% endif %}",
+    "{% if state_attr(e, 'safety_override') %}",
+    "## 🥶 Low-temperature safety active",
+    "A room is at or below its safety temperature, so the boiler is being kept heating.",
+    "{% endif %}",
+    "{% endif %}",
+  ].join("\n");
+}
+
+function boilerCards(hass, boiler, heading) {
+  const states = hass.states || {};
+  const cards = [];
+  if (heading) cards.push({ type: "markdown", content: `# ${heading}` });
+  if (ENTITY_ID.test(boiler.entity)) {
+    cards.push({ type: "markdown", content: statusTemplate(boiler.entity) });
+  }
+  cards.push({ type: "custom:boiler-heat-demand-card", entity: boiler.entity, name: heading || boiler.name });
+
+  const rows = [
+    { entity: boiler.entity },
+    { type: "attribute", entity: boiler.entity, attribute: "alerts", name: "Alerts" },
+    { type: "attribute", entity: boiler.entity, attribute: "safety_override", name: "Low-temperature safety" },
+  ];
+  const shown = ["calling_entity", "pid_entity", "cumulative_pid_entity", "max_deficit_entity", "cumulative_delta_entity", "learned_entity"];
+  for (const key of [...shown, "auto_button", "on_button", "off_button"]) {
+    const id = boiler.ids[key];
+    if (id && states[id]) rows.push({ entity: id });
+  }
+  cards.push({ type: "entities", title: "Details", show_header_toggle: false, entities: rows });
+  return cards;
+}
+
+function noBoilerCards() {
+  return [{
+    type: "markdown",
+    content: "## No boiler found\nThe Boiler Heat Demand integration has no configured boiler. Add it under Settings → Devices & services, then reload this dashboard.",
+  }];
+}
+
+function failedCards(err) {
+  return [{
+    type: "markdown",
+    content: `## Boiler dashboard could not be built\n${String((err && err.message) || err)}\n\nUse the card on its own: \`type: custom:boiler-heat-demand-card\`.`,
+  }];
+}
+
+// Never throws: a strategy that throws shows the user a raw error.
+function buildCards(hass) {
+  try {
+    const boilers = findBoilers(hass);
+    if (!boilers.length) return { boilers, cards: noBoilerCards() };
+    const many = boilers.length > 1;
+    return { boilers, cards: boilers.flatMap((b) => boilerCards(hass, b, many ? b.name : undefined)) };
+  } catch (err) {
+    return { boilers: [], cards: failedCards(err) };
+  }
+}
+
+class BoilerHeatDemandDashboardStrategy extends HTMLElement {
+  static async generate(config, hass) {
+    // One view per boiler device, so each gets its own tab.
+    try {
+      const boilers = findBoilers(hass);
+      if (!boilers.length) {
+        return { title: "Boiler", views: [{ title: "Boiler", path: "boiler", icon: "mdi:water-boiler", cards: noBoilerCards() }] };
+      }
+      return {
+        title: "Boiler",
+        views: boilers.map((b, i) => ({
+          title: b.name,
+          path: boilers.length > 1 ? `boiler-${i + 1}` : "boiler",
+          icon: "mdi:water-boiler",
+          cards: boilerCards(hass, b),
+        })),
+      };
+    } catch (err) {
+      return { title: "Boiler", views: [{ title: "Boiler", path: "boiler", cards: failedCards(err) }] };
+    }
+  }
+}
+
+class BoilerHeatDemandViewStrategy extends HTMLElement {
+  static async generate(config, hass) {
+    // A view strategy returns a single view, so several boilers share it.
+    return { cards: buildCards(hass).cards };
+  }
+}
+
 if (!customElements.get("boiler-heat-demand-card")) {
   customElements.define("boiler-heat-demand-card", BoilerHeatDemandCard);
   customElements.define("boiler-heat-demand-card-editor", BoilerHeatDemandCardEditor);
+}
+if (!customElements.get("ll-strategy-dashboard-boiler-heat-demand")) {
+  customElements.define("ll-strategy-dashboard-boiler-heat-demand", BoilerHeatDemandDashboardStrategy);
+  customElements.define("ll-strategy-view-boiler-heat-demand", BoilerHeatDemandViewStrategy);
 }
 
 window.customCards = window.customCards || [];
