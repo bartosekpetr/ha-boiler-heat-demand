@@ -38,6 +38,11 @@ jobs:
           python-version: "3.14"
       - name: Install test dependencies
         run: python -m pip install -r requirements-test.txt
+      # tests/test_status_banner.py drives the shipped dashboard strategy through
+      # node to render its Jinja banner, and skips if node is missing. Fail here
+      # instead of letting that coverage disappear quietly.
+      - name: Check node is available
+        run: node --version
       - name: Run tests
         run: python -m pytest -q tests
       - name: Compile integration and tests
