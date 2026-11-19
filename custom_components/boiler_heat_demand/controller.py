@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Callable
 from datetime import timedelta
@@ -96,6 +97,9 @@ class BoilerController:
         self.decision = Decision(False, False, ())
         self._calling: set[str] = set()
         self._last_change: float | None = None
+        # (relay on?, wall-clock time) of our last command; persisted across reloads.
+        self._last_command: tuple[bool, float] | None = None
+        self._restored_change: tuple[bool, float] | None = None
         self._commanded: bool | None = None
         self._commanded_at: float | None = None
         self._relay_bad_since: float | None = None
@@ -124,6 +128,16 @@ class BoilerController:
 
     async def async_load(self) -> None:
         data = await self._store.async_load()
+        last = data.get("last_command") if isinstance(data, dict) else None
+        if (
+            isinstance(last, list)
+            and len(last) == 2
+            and isinstance(last[0], bool)
+            and isinstance(last[1], (int, float))
+            and not isinstance(last[1], bool)
+            and math.isfinite(last[1])
+        ):
+            self._restored_change = (last[0], float(last[1]))
         rooms = data.get("rooms") if isinstance(data, dict) else None
         if not isinstance(rooms, dict):
             return
@@ -138,11 +152,18 @@ class BoilerController:
         self._store.async_delay_save(self._dump, SAVE_DELAY_S)
 
     def _dump(self) -> dict:
-        return {"rooms": {k: v.model.to_dict() for k, v in self.learners.items()}}
+        data: dict = {
+            "rooms": {k: v.model.to_dict() for k, v in self.learners.items()}
+        }
+        if self._last_command is not None:
+            data["last_command"] = list(self._last_command)
+        return data
 
     async def async_reset_learning(self) -> None:
         self.learners.clear()
         await self._store.async_remove()
+        if self._last_command is not None:
+            self._store.async_delay_save(self._dump, 1)  # keep the relay lockout, drop only the models
         self._publish(self.decision)
 
     async def async_set_manual_override(self, state: bool) -> None:
@@ -479,6 +500,14 @@ class BoilerController:
             await self._check_relay(cfg, None, False)
             self._publish(Decision(demand or too_cold, False, tuple(sorted(calling))))
             return
+        if self._last_change is None and self._restored_change is not None:
+            # After a restart or reload, re-arm the lockouts from the persisted
+            # time of our last command, if the relay is still in that state.
+            was_on, changed_at = self._restored_change
+            self._restored_change = None
+            if was_on == boiler_is_on:
+                age = max(0.0, dt_util.utcnow().timestamp() - changed_at)
+                self._last_change = time.monotonic() - age
         since = None
         if self._last_change is not None:
             since = time.monotonic() - self._last_change
@@ -533,6 +562,9 @@ class BoilerController:
             return
         if self._mark_commanded(on):
             self._last_change = time.monotonic()
+            self._last_command = (on, dt_util.utcnow().timestamp())
+            # Save soon: a reload right after a switch must still see it.
+            self._store.async_delay_save(self._dump, 1)
 
     def _mark_commanded(self, on: bool) -> bool:
         """Record the command; keep the original timestamp when re-sending the same one."""

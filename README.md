@@ -38,7 +38,7 @@ Each room is modelled separately from its room temperature (sensor or valve medi
 - **Early stop:** heating stops when `current + coast rise ≥ target`, which reduces overshoot.
 - **Pre-start:** heating starts when the temperature predicted after the lag would fall below `target − start threshold`.
 - **Self-tuning:** after each cycle the start threshold and stop point are nudged by 0.1 °C if the room overshot or undershot. Values are clamped, and the start threshold always stays above the stop point to prevent flapping.
-- A room is used only after **3 complete heating cycles**; before that the fixed rules apply. Minimum on/off times and the low-temperature safety always take precedence.
+- A room is used only after **3 complete heating cycles**; before that the fixed rules apply. Minimum on/off times and the low-temperature safety always take precedence. After a restart or reload the minimum on/off lockout is re-armed from the time of the integration's last relay command (stored with the learning data).
 - Models are stored across restarts. Use *Reset learning* after big changes (new radiator, insulation). Learning can be disabled in the options. It only learns from the room's own readings, so rooms with coarse sensors (0.5 °C steps) learn more slowly.
 
 ## Install

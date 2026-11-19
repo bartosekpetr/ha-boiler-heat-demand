@@ -11,6 +11,7 @@ if sys.platform == "win32":
         "Home Assistant integration tests run on Linux in CI", allow_module_level=True
     )
 
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_mock_service,
@@ -778,6 +779,45 @@ async def test_heat_is_allowed_immediately_once_valves_appear_after_a_restart(ha
     await controller.async_evaluate()
 
     assert [c.data["entity_id"] for c in on_calls] == ["switch.boiler"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_min_on_lockout_survives_a_reload(hass, freezer):
+    """A new controller restores the persisted time of the last relay command."""
+    off_calls = async_mock_service(hass, "switch", "turn_off")
+    hass.states.async_set("switch.boiler", "on")
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"temperature": 20, "current_temperature": 21},
+    )
+    controller = BoilerController(hass, _restart_entry())
+    controller._restored_change = (True, dt_util.utcnow().timestamp())
+    freezer.tick(timedelta(seconds=30))  # relay turned on 30 s ago, min on is 5 min
+
+    await controller.async_evaluate()
+    assert off_calls == []  # still inside the minimum on time
+
+    freezer.tick(timedelta(minutes=10))
+    await controller.async_evaluate()
+    assert [c.data["entity_id"] for c in off_calls] == ["switch.boiler"]
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_persisted_lockout_is_ignored_when_the_relay_changed_meanwhile(hass):
+    off_calls = async_mock_service(hass, "switch", "turn_off")
+    hass.states.async_set("switch.boiler", "on")
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"temperature": 20, "current_temperature": 21},
+    )
+    controller = BoilerController(hass, _restart_entry())
+    controller._restored_change = (False, dt_util.utcnow().timestamp())
+
+    await controller.async_evaluate()
+
+    assert [c.data["entity_id"] for c in off_calls] == ["switch.boiler"]
 
 
 @pytest.mark.usefixtures("enable_custom_integrations")
