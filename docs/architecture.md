@@ -13,12 +13,13 @@ Derived entirely from this repository: `custom_components/boiler_heat_demand/`,
 `tests/`, `.github/workflows/validate.yml`, `README.md`, `AGENTS.md` and
 `CONTRIBUTING.md` at commit `c30b59a` ("Release 0.6.0", `manifest.json` version
 `0.6.0`). **No live Home Assistant, boiler, relay or valve was touched.** Every
-edge below is marked `measured-by-test`, `observed-only` or `inferred` in §9, and
+edge below is marked `measured-by-test`, `observed-only` or `inferred` in §8, and
 the places that were never probed are named there rather than drawn as if they
 had been.
 
-**Nine source modules, one config entry per relay, one Home Assistant device
-("Automated Boiler"), eleven entities, zero runtime dependencies.** The control
+**Ten Python modules plus one browser module, one config entry per relay, one
+Home Assistant device ("Automated Boiler"), eleven entities, zero runtime
+dependencies** (`manifest.json` `"requirements": []`). The control
 loop is a single `async` evaluation, serialised behind a lock, that reads the
 Home Assistant state machine and writes exactly one thing: a `turn_on` /
 `turn_off` service call on a relay entity.
