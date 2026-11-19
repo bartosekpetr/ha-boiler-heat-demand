@@ -28,72 +28,76 @@ Home Assistant state machine and writes exactly one thing: a `turn_on` /
 ## 1. The whole system
 
 ```
-  ┌──────────────── outside this integration ─────────────────────────────┐
-  │                                                                       │
-  │  TRV integration            relay integration        notify platform  │
-  │  (Z2M / ZHA / Z-Wave /      (switch.* or             (notify.*)       │
-  │   Matter / anything)         input_boolean.*)                         │
-  │     │         │                   ▲    │                   ▲         │
-  │     │climate  │sensor %           │    │state              │         │
-  └─────┼─────────┼───────────────────┼────┼───────────────────┼─────────┘
-        │         │                   │    │                   │
-        ▼         ▼                   │    ▼                   │
-  ┌───────────────────────────────────┼────────────────────────────────────┐
-  │          HOME ASSISTANT CORE      │                                    │
-  │  state machine · entity/device/area registries · Store (.storage)      │
-  │  persistent_notification · issue_registry (Repairs) · http · frontend  │
-  └───┬───────────────────────────────┼──────────────────▲────────────┬────┘
-      │ states + state_change events  │ service call     │ read/write │ static
-      │ (valves, PID sensors,         │ switch.turn_on   │ registries │ route +
-      │  room sensors, relay)         │ homeassistant.*  │            │ extra_js
-      ▼                               │                  │            │
-  ┌─────────────────────────────────────────────────────────────────┐  │
-  │  controller.py — BoilerController        ONE PER CONFIG ENTRY   │  │
-  │                                                                  │  │
-  │  start() ──┬─ async_track_state_change_event (snapshot at start)│  │
-  │            └─ async_track_time_interval 30 s                    │  │
-  │                        │                                        │  │
-  │  async_evaluate() ── asyncio.Lock ── _guarded_evaluate()        │  │
-  │                        │             (catches everything)       │  │
-  │                        ▼                                        │  │
-  │  _snapshot ▸ aggregate_room ▸ learner ▸ demand_met ▸ decide     │  │
-  │                        │                     │          │       │  │
-  │                        │              ┌──────┴──┐  ┌────┴────┐  │  │
-  │                        │              │demand.py│  │learning │  │  │
-  │                        │              │  PURE   │  │.py PURE │  │  │
-  │                        │              └─────────┘  └────┬────┘  │  │
-  │                        │                                │       │  │
-  │                        ├─ _command() ──▶ relay service call ────┼──┘
-  │                        ├─ _check_relay() ──▶ alerts            │
-  │                        ├─ _raise_alert() ──▶ notification +    │
-  │                        │                     Repairs + notify.* │
-  │                        ├─ Store.async_delay_save ──▶ .storage  │
-  │                        └─ _publish() ──▶ listener callbacks    │
-  └───────────────────────────────┬─────────────────────────────────┘
-                                  │ add_listener / async_write_ha_state
-      ┌───────────────────────────┴───────────────────────────┐
-      │  binary_sensor.py   sensor.py (6)      button.py (4)  │
-      │  Heat demand        Rooms calling      Boiler on      │
-      │                     Rooms learned      Boiler off      │
-      │                     Max room deficit   Resume auto     │
-      │                     Max PID demand     Reset learning  │
-      │                     Cumulative PID                     │
-      │                     Cumulative delta                   │
-      └───────────────────────────┬───────────────────────────┘
-                                  │ states over the HA websocket
-                                  ▼
-      ┌───────────────────────────────────────────────────────┐
-      │  frontend/boiler-heat-demand-card.js  (browser)       │
-      │  boiler-heat-demand-card + editor                     │
-      │  ll-strategy-dashboard-boiler-heat-demand             │
-      │  writes back ONLY via button.press                    │
-      └───────────────────────────────────────────────────────┘
+  OUTSIDE THIS INTEGRATION — each line below is a Home Assistant entity or service
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  TRV integration (Zigbee2MQTT / ZHA / Z-Wave / Matter / anything)        │
+  │      climate.*   hvac_mode · hvac_action · current/target temperature    │
+  │      sensor.* %  the device's PID heating demand, if it has one          │
+  │  Room sensor (optional)      sensor.*, device_class temperature          │
+  │  Outdoor sensor (optional)   sensor.* or weather.*                       │
+  │  Relay                       switch.*  or  input_boolean.*               │
+  │  notify.<service> (optional) critical-alert delivery                     │
+  │  GAS BOILER                  behind the contact — NEVER read, NEVER      │
+  │                              addressed. The loop ends at the relay.      │
+  └─────┬──────────────────────────────────────┴─────────────────┴───────────┘
+        │ states                               ▲ turn_on/off     ▲ notify
+        ▼                                      │                 │
+  ┌─────┬──────────────────────────────────────┴─────────────────┴───────────┐
+  │  HOME ASSISTANT CORE                                                     │
+  │  state machine + state_change events · entity/device/area registries     │
+  │  Store  .storage/boiler_heat_demand.<entry_id>.learning                  │
+  │  persistent_notification · issue_registry (Repairs) · http · frontend    │
+  └─────┬──────────────────────────────────────┴─────────────────┴───────────┘
+        │ tracked state changes +              ▲ service call,   ▲ alert
+        │ a 30 s tick                          │ store, issues   │
+        ▼                                      │                 │
+  ┌─────┬──────────────────────────────────────┴─────────────────┴───────────┐
+  │  controller.py — BoilerController            ONE PER CONFIG ENTRY        │
+  │  the ONLY component that reads HA state and writes the relay             │
+  │                                                                          │
+  │  start() ──┬─ async_track_state_change_event  (entity list FIXED here)   │
+  │            ├─ async_track_time_interval 30 s                             │
+  │            └─ async_at_started  (defers the first run at boot)           │
+  │                                                                          │
+  │  async_evaluate() ─ asyncio.Lock ─ _guarded_evaluate()  catches ALL      │
+  │         │                                                                │
+  │         ├──▶ demand.py    PURE, no HA imports                            │
+  │         │      _snapshot ▸ aggregate_room ▸ demand_met ▸ decide          │
+  │         ├──▶ learning.py  PURE, no HA imports                            │
+  │         │      observe() ▸ learned_call()  — refines, never overrides    │
+  │         ├──▶ devices.py   pid_entity_for_climate, EVERY cycle            │
+  │         │                                                                │
+  │         ├─ _command()      ──▶ relay service call                        │
+  │         ├─ _check_relay()  ──▶ relay_unavailable / relay_stuck alerts    │
+  │         ├─ _raise_alert()  ──▶ notification + Repairs + notify.<service> │
+  │         ├─ Store.async_delay_save  300 s models / 1 s last command       │
+  │         └─ _publish()      ──▶ listener callbacks                        │
+  └─────┬────────────────────────────────────────────────────────────────────┘
+        │ down: add_listener ▸ async_write_ha_state
+        ▼ up:   the four buttons call back into the controller
+  ┌─────┬────────────────────────────────────────────────────────────────────┐
+  │  binary_sensor.py (1)   sensor.py (6)              button.py (4)         │
+  │  Heat demand            Rooms calling for heat     Boiler on             │
+  │                         Rooms learned              Boiler off            │
+  │                         Max room temp deficit      Resume automatic      │
+  │                         Maximum PID demand         Reset learning        │
+  │                         Cumulative PID demand                            │
+  │                         Cumulative temp delta                            │
+  │  all 11 under ONE device: 'Automated Boiler'  (DOMAIN, entry_id)         │
+  └─────┬────────────────────────────────────────────────────────────────────┘
+        │ down: states over the HA websocket
+        ▼ up:   hass.callService('button', 'press') — the only write
+  ┌─────┬────────────────────────────────────────────────────────────────────┐
+  │  frontend/boiler-heat-demand-card.js  — runs in the BROWSER              │
+  │  boiler-heat-demand-card + its editor                                    │
+  │  ll-strategy-dashboard-boiler-heat-demand  (dashboard strategy)          │
+  │  served at /boiler_heat_demand/...js?v=<version>, once per HA START      │
+  └──────────────────────────────────────────────────────────────────────────┘
 
-  setup / options:  config_flow.py ──▶ devices.py ──▶ HA registries
-                    (DeviceSelector ▸ climate entities ▸ areas ▸ rooms)
-
-  not in the loop at all:  the GAS BOILER. The relay is the last thing
-                           this integration can see.
+  setup / options path, not part of the loop:
+      config_flow.py ──▶ devices.py ──▶ entity/device/area registries
+      valve DEVICES ▸ climate entities ▸ areas ▸ rooms; stored only as
+      valve_entities, so every earlier config entry still loads unchanged
 ```
 
 Same graph in Mermaid, with every direction made explicit:
