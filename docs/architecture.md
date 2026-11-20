@@ -4,18 +4,19 @@ What this integration is made of, which surface each module owns, and which way
 data flows across every edge — from a thermostatic radiator valve's `climate`
 state to a relay service call, and back.
 
-*Diagram current as of `c30b59a` — 2026-11-19.* Kept up to date by the
+*Diagram current as of `651ead3` — 2026-11-20.* Kept up to date by the
 "Architecture diagram upkeep — HA boiler demand" routine, which re-checks this
 file against the commits made since that baseline whenever work happens in the
 project.
 
 Derived entirely from this repository: `custom_components/boiler_heat_demand/`,
 `tests/`, `.github/workflows/validate.yml`, `README.md`, `AGENTS.md` and
-`CONTRIBUTING.md` at commit `c30b59a` ("Release 0.6.0", `manifest.json` version
-`0.6.0`). **No live Home Assistant, boiler, relay or valve was touched.** Every
-edge below is marked `measured-by-test`, `observed-only` or `inferred` in §8, and
-the places that were never probed are named there rather than drawn as if they
-had been.
+`CONTRIBUTING.md` at commit `651ead3` ("Keep the minimum on/off lockout across
+reloads and restarts"; `manifest.json` version `0.6.0`, unchanged since the
+`c30b59a` release). **No live Home Assistant, boiler, relay or valve was
+touched.** Every edge below is marked `measured-by-test`, `observed-only` or
+`inferred` in §8, and the places that were never probed are named there rather
+than drawn as if they had been.
 
 **Ten Python modules plus one browser module, one config entry per relay, one
 Home Assistant device ("Automated Boiler"), eleven entities, zero runtime
@@ -149,7 +150,7 @@ graph TB
     RELAY -.->|"dry contact — outside HA,<br/>never confirmed back"| BOILER
     CTRL -->|"calls on alert, fire-and-forget"| NOTIFY
     CTRL -->|"async_delay_save 300 s / 1 s"| STORE
-    STORE -->|"async_load at setup"| CTRL
+    STORE -->|"async_load at setup:<br/>models + last relay command"| CTRL
     CTRL --> PN
     CTRL --> IR
     CTRL -->|"snapshots, aggregates, decides"| DEMAND
@@ -307,7 +308,22 @@ store and the room starts from zero cycles. Nothing reports this.
 models are debounced by `SAVE_DELAY_S = 300`; the relay's last command is saved
 with a 1 s delay so a reload right after a switch still sees it. `Reset learning`
 calls `async_remove()` on the whole store and then re-saves only the relay
-record — deliberately keeping the lockout while dropping every model.
+record — deliberately keeping the lockout while dropping every model. But it
+re-saves that record **only if `_last_command` is set**, and `_last_command` is
+populated by `_command`, never by `async_load`. Pressing *Reset learning* after a
+restart but before this controller has switched the relay therefore deletes the
+persisted lockout outright: the running controller still honours the lockout it
+restored into `_last_change`, and the next reload starts with none.
+
+**The lockout is stored in wall-clock time and restored into monotonic time.**
+`_command` records `dt_util.utcnow().timestamp()`; the restore turns it into an
+age and backdates `time.monotonic()`. The age is clamped at `0`, so a system
+clock that stepped *backwards* during the downtime re-arms the full lockout,
+while one that stepped forwards shortens or cancels it. The restore is also a
+one-shot, and it sits **after** both early returns — so it survives cycles where
+no valve has loaded yet or the relay is unavailable, but the first cycle that
+does reach it consumes `_restored_change` and arms nothing at all if the relay no
+longer reports the state that was commanded.
 
 **Removal and reload are not the same operation.** `async_unload_entry` stops
 the controller and leaves the relay exactly as it is; `async_remove_entry` turns
@@ -415,7 +431,7 @@ graph TB
 | **Out** | `entry.data` on create, `entry.options` on update — both merged by the controller, options winning |
 | **Stored valve format** | **always `valve_entities` (climate entity ids)**. `valve_devices` is a *form* field only: it is resolved and `pop`ped, never persisted. That is what lets config entries from every earlier version load unchanged, and why the options form re-derives its device pre-selection from the stored entity ids |
 | **Uniqueness** | `async_set_unique_id(relay_entity)` — one config entry per relay |
-| **Re-entry** | any options save triggers `_reload`, which fully reloads the entry: new controller, learners re-read from the store, **in-memory manual override and lockout discarded** |
+| **Re-entry** | any options save triggers `_reload`, which fully reloads the entry: new controller, learners **and the relay lockout** re-read from the store, **in-memory manual override and relay verify window discarded** |
 
 ### 4.6 The entity layer — `binary_sensor.py`, `sensor.py`, `button.py`
 
@@ -487,7 +503,8 @@ YAML once.
 **No rollback at all** for three things, worth knowing before touching them:
 
 - **`Reset learning`** calls `Store.async_remove()`. Every room's model is gone
-  immediately; only the relay lockout record is rewritten. There is no backup.
+  immediately; the relay lockout record is rewritten only if this controller has
+  commanded the relay since it loaded (§3). There is no backup.
 - **Deleting the config entry** turns an `on` relay **off** as a side effect of
   removal.
 - **Learning written up to 5 minutes late.** `SAVE_DELAY_S = 300`, so an abrupt
@@ -504,25 +521,42 @@ The task these diagrams exist for: knowing what is kept and what is dropped.
 | state | Home Assistant restart | entry reload (options save) | entry delete |
 |---|---|---|---|
 | learned `RoomModel`s | **kept** (store, validated and clamped on load) | kept | **deleted with the store** |
-| min on/off lockout (`_last_change`) | **lost** at `c30b59a` — in memory only | **lost** | n/a |
+| min on/off lockout (`_last_change`) | **kept** since `651ead3`, re-armed from the stored `last_command` — if all three conditions below hold | **kept**, same three conditions | n/a |
 | manual override + its timer | **lost**, returns to automatic | **lost** | n/a |
 | alerts (`self.alerts`) | **lost**; re-raised on the next bad cycle. Repairs issues and notifications were created in HA and persist | lost, same | Repairs issues outlive the controller unless cleared |
 | `_commanded` / verify window | lost | lost | n/a |
 | relay | untouched; `async_at_started` defers the first evaluation, and "no valve state at all" returns before switching | untouched | **turned off if on** |
 | the card's static route | re-registered once in `async_setup` | **not** re-registered | route stays until restart |
 
-Two consequences of row 2 at this baseline. First, the first evaluation after a
-restart sees `seconds_since_change is None`, which `decide` reads as "no lockout
-applies" — so the boiler can switch immediately after a restart even if it
-switched seconds earlier. `tests/test_ha_glue.py` asserts exactly this
-(`heat_is_allowed_immediately_once_valves_appear_after_a_restart`,
-`no min_off lockout was armed`). Second, a tight reload loop can therefore
-short-cycle the boiler, bounded only by how often the entry is reloaded.
+Row 2 is what changed at `651ead3`, and it is a conditional "kept", not an
+unconditional one. All three must hold for the lockout to carry over:
 
-> **In flight at this baseline:** the working tree (uncommitted at `c30b59a`)
-> adds a `last_command` record to the store and re-arms the lockout from it, so
-> row 2 becomes "kept, if the relay is still in the commanded state". When that
-> lands, this table and §4.1 are the parts to update.
+1. **The store holds a `last_command`.** It is written by `_command` with a 1 s
+   debounce, so only if *this integration* has actually switched the relay since
+   the store was last removed. A fresh install, or a *Reset learning* before the
+   first switch, leaves no record.
+2. **The record passes `async_load`'s validation** — a two-element list of a real
+   `bool` and a finite, non-`bool` number. Anything else is ignored in silence
+   and the entry starts with no lockout.
+3. **The relay still reports the state that was commanded** (`was_on ==
+   boiler_is_on`), tested on the first cycle that reaches the lockout code.
+
+When all three hold, `_last_change` is backdated by the record's age, so the
+minimum on/off time expires at the wall-clock moment it would have anyway — that
+is what stops a tight reload loop from short-cycling the boiler. When any one
+fails, the first evaluation sees `seconds_since_change is None`, which `decide`
+reads as "no lockout applies", and the boiler may switch immediately.
+`tests/test_ha_glue.py` holds both halves: `min_on_lockout_survives_a_reload`
+for the carry-over,
+`persisted_lockout_is_ignored_when_the_relay_changed_meanwhile` for condition 3,
+and `restart_with_running_relay_and_missing_valves_does_not_switch_it_off` still
+asserts `_last_change is None` on a cold start with no stored record.
+
+**What is still not carried over is the verify window.** `_commanded` and
+`_commanded_at` are in memory only (row 5). A command issued seconds before a
+reload is therefore never checked against the relay by the new controller: the
+lockout remembers that a switch happened, but nothing remembers that it was
+unconfirmed, so a `relay_stuck` that was about to fire is quietly forgotten.
 
 ---
 
@@ -541,7 +575,9 @@ Read the symptom, suspect the right component. Several rows are **not faults.**
 | A valve appears in `pid_source_by_valve` but never moves the maximum | **not a fault** | the source is recorded before the `hvac_mode != off` filter; an off valve contributes nothing |
 | A room's `Rooms learned` entry reset to 0 cycles | **not a fault** — a key change | the room name or the valve's entity id changed; learners are keyed by room name |
 | Learning never becomes `ready` | `learning.py` gates, or a coarse sensor | needs 3 complete coast cycles **and** a `heat_rate`, which needs a 15 min–2 h window with ≥ 0.05 °C/h rise. 0.5 °C-resolution sensors learn slowly |
-| Boiler short-cycles right after a restart or a reload | **the in-memory lockout** at this baseline | `_last_change` is not persisted at `c30b59a`; see §6 |
+| Boiler short-cycles right after a restart or a reload | **a missing or rejected `last_command` record** | the lockout is re-armed from the store, but only under the three conditions in §6 — most often the relay no longer reports the commanded state, or this integration had never switched it |
+| The lockout survived reloads, then stopped after a *Reset learning* | **not a fault** — a documented trap | `async_remove()` drops the whole store and rewrites the relay record only if this controller had commanded the relay since loading; see §3 |
+| A relay that did not follow a command raises no `relay_stuck` after a reload | **by design, and a real gap** | the verify window is in memory only; §6 |
 | An outdoor-temperature change does nothing for up to 30 s | **not a fault** — by design | the outdoor sensor is read inside the evaluation and is **not** subscribed |
 | A new PID sensor is ignored until a reload | **partly by design** | it is used by the demand logic from the next tick, but it is not a wake source until `start()` re-runs |
 | `Custom element doesn't exist: boiler-heat-demand-card` | the browser cache, or `card_file_missing` | the route is registered once per HA **start**; a reload is not enough. Check the log line and Repairs. Boiler control is unaffected |
@@ -566,6 +602,8 @@ live hardware. No live Home Assistant, relay, boiler or valve was contacted.
 | state machine → `_snapshot` → PID source resolution (device sensor, climate attribute, legacy entry) | ✅ **measured-by-test** — `tests/test_ha_glue.py` against real device/entity registries |
 | `_command` → relay service call, and relay state read back | ✅ **measured-by-test** — PID-driven relay switching, failsafe, and "no evaluation commands the relay after `stop()`" |
 | restart behaviour: deferred first evaluation, missing valves not switching a running relay off | ✅ **measured-by-test** |
+| the restored relay lockout: carry-over under a frozen clock, and the rejection when the relay changed meanwhile | ✅ **measured-by-test** — the two §6 tests, both of which set `_restored_change` on the controller directly |
+| the round trip that feeds it — `_command` → `_dump` → the `.storage` file → `async_load` → `_restored_change` | ⚪ **inferred** — no test writes and re-reads a `last_command`. The tolerant-loading test covers `RoomModel.from_dict`, not this record, so the validation in condition 2 of §6 is code-read only |
 | frost protection with invalid / stale / offline sensors; unit conversion | ✅ **measured-by-test** |
 | manual-override expiry and never-expire | ✅ **measured-by-test** |
 | `evaluation_failed` raise/clear, and listener isolation in `_publish` | ✅ **measured-by-test** |
@@ -582,10 +620,13 @@ live hardware. No live Home Assistant, relay, boiler or valve was contacted.
 | reload/restart interaction with a live HA frontend and browser cache | ⚪ **inferred** — reasoned from `async_setup`, `add_extra_js_url` and `cache_headers=False`; never observed in a browser |
 | config-flow behaviour against a large real installation (dozens of devices, mixed areas) | ⚪ **not probed** |
 
-Two gaps are worth closing if this diagram is ever used for change planning:
+Three gaps are worth closing if this diagram is ever used for change planning:
 the card's browser-side rendering has no automated coverage at all (the strategy
-does), and the `notify` path — the one that is supposed to wake a human when the
-relay is stuck — is the least exercised edge in the system.
+does); the `notify` path — the one that is supposed to wake a human when the
+relay is stuck — is the least exercised edge in the system; and, newly at
+`651ead3`, the relay lockout's *decision* side is tested while its *persistence*
+side is not, so a change to `_dump` or `async_load` could break the carry-over
+with every existing test still green.
 
 ---
 
