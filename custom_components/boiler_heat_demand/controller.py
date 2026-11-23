@@ -152,9 +152,7 @@ class BoilerController:
         self._store.async_delay_save(self._dump, SAVE_DELAY_S)
 
     def _dump(self) -> dict:
-        data: dict = {
-            "rooms": {k: v.model.to_dict() for k, v in self.learners.items()}
-        }
+        data: dict = {"rooms": {k: v.model.to_dict() for k, v in self.learners.items()}}
         if self._last_command is not None:
             data["last_command"] = list(self._last_command)
         return data
@@ -163,7 +161,9 @@ class BoilerController:
         self.learners.clear()
         await self._store.async_remove()
         if self._last_command is not None:
-            self._store.async_delay_save(self._dump, 1)  # keep the relay lockout, drop only the models
+            self._store.async_delay_save(
+                self._dump, 1
+            )  # keep the relay lockout, drop only the models
         self._publish(self.decision)
 
     async def async_set_manual_override(self, state: bool) -> None:
@@ -650,7 +650,7 @@ class BoilerController:
                 },
                 blocking=True,
             )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001 - notify service is user-configured and may be missing; a failed alert push must not break the evaluation
             _LOGGER.error("Critical notification via %s failed: %s", service, err)
 
     def _clear_alert(self, key: str) -> None:
