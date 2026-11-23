@@ -4,7 +4,7 @@ What this integration is made of, which surface each module owns, and which way
 data flows across every edge — from a thermostatic radiator valve's `climate`
 state to a relay service call, and back.
 
-*Diagram current as of `3ca0303` — 2026-11-21.* Kept up to date by the
+*Diagram current as of `aaa933c` — 2026-11-23.* Kept up to date by the
 "Architecture diagram upkeep — HA boiler demand" routine, which re-checks this
 file against the commits made since that baseline whenever work happens in the
 project.
@@ -13,8 +13,8 @@ Derived entirely from this repository: `custom_components/boiler_heat_demand/`,
 `tests/`, `.github/workflows/validate.yml`, `README.md`, `AGENTS.md` and
 `CONTRIBUTING.md` at commit `651ead3` ("Keep the minimum on/off lockout across
 reloads and restarts"; `manifest.json` version `0.6.0`, unchanged since the
-`c30b59a` release) and re-checked through `3ca0303`, which touched only this
-document, so the code it describes is byte-identical at both commits. **No live
+`c30b59a` release) and re-checked through `aaa933c`; every commit since has
+touched only this document, so the code described here is unchanged. **No live
 Home Assistant, boiler, relay or valve was touched.** Every edge below is
 marked `measured-by-test`, `observed-only` or
 `inferred` in §8, and the places that were never probed are named there rather
